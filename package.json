@@ -1,14 +1,15 @@
 {
   "name": "getcourse-mcp",
   "version": "0.1.0",
-  "description": "MCP server for GetCourse account automation (lesson access, users, trainings) via the logged-in session cookie.",
+  "description": "MCP server that automates a GetCourse account (grant lesson/training access, manage users & groups) through a logged-in browser over CDP.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "getcourse-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "assets"
   ],
   "engines": {
     "node": ">=18.0.0"
@@ -18,7 +19,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -32,7 +34,32 @@
     "typescript": "^5.7.0",
     "vitest": "^3.1.1"
   },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "ai",
+    "getcourse",
+    "lms",
+    "elearning",
+    "automation",
+    "cdp",
+    "playwright",
+    "typescript"
+  ],
   "mcpName": "io.github.skiddgoddamn/getcourse-mcp",
   "license": "MIT",
-  "author": "skiddgoddamn (https://github.com/skiddgoddamn)"
+  "author": "skiddgoddamn (https://github.com/skiddgoddamn)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skiddgoddamn/getcourse-mcp.git"
+  },
+  "homepage": "https://github.com/skiddgoddamn/getcourse-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/skiddgoddamn/getcourse-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

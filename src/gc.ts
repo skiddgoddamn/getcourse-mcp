@@ -6,9 +6,9 @@ import { loadConfig, type GcConfig } from "./config.js";
  * GetCourse driver.
  *
  * No public API covers per-training/group access management, so we operate the
- * account through a logged-in browser over CDP (like tilda-mcp): the browser
- * carries the session cookie + CSRF automatically. Reads hit the internal admin
- * URLs; the one write (add user to group(s)) drives the bulk "add users" form.
+ * account through a logged-in browser over CDP: the browser carries the session
+ * cookie + CSRF automatically. Reads hit the internal admin URLs; the one write
+ * (add user to group(s)) drives the bulk "add users" form.
  *
  * Requires a Chromium/Yandex browser started with --remote-debugging-port and
  * an admin logged into the account.

@@ -1,70 +1,127 @@
+<div align="center">
+
 # getcourse-mcp
 
-MCP-сервер для автоматизации аккаунта **GetCourse** через залогиненный браузер по CDP
-(официальный API не покрывает управление доступом к тренингам/группам). Модель — как в
-`tilda-mcp`: браузер несёт session-cookie и CSRF, сервер дёргает внутренние admin-URL.
+**Automate a [GetCourse](https://getcourse.io) account from an AI agent — grant lesson/training access, manage users and groups — with no official API.**
 
-## Как работает доступ в GetCourse
+[![npm version](https://img.shields.io/npm/v/getcourse-mcp?color=CB3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/getcourse-mcp)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![MCP](https://img.shields.io/badge/MCP-server-6E56CF)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![PRs welcome](https://img.shields.io/badge/PRs-welcome-34c759)
 
-Доступ к тренингу/урокам выдаётся **членством в группах**. Например, «полный доступ» к
-тренингу может означать членство в группе «Модуль 1» + группе, запускающей расписание
-(первый модуль сейчас, остальные — по графику). Чтобы «выдать доступ как у другого ученика»,
-смотрят его группы (`gc_check_membership`) и повторяют их для нового.
+**English** · [Русский](./README.ru.md)
 
-## Требования
+<img src="assets/hero.svg" alt="getcourse-mcp — logged-in browser → MCP server → GetCourse" width="100%">
 
-1. Chromium/Yandex-браузер, запущенный с debug-портом на отдельном профиле, с входом в аккаунт:
+</div>
+
+## Why
+
+GetCourse has no public API for the things admins do every day — opening a lesson for a student, adding someone to a training, moving users between groups. Those actions live only in the admin UI.
+
+**getcourse-mcp** exposes them as [MCP](https://modelcontextprotocol.io) tools. It drives a **browser you're already logged into** over CDP, so it reuses your real session cookie and CSRF token — no scraping of passwords, no fragile API keys. An AI agent (Claude, etc.) can then find a user, inspect their groups and grant access in one turn.
+
+- 🔑 **Uses your live session** — connects over CDP to a logged-in Chromium/Yandex browser
+- 👥 **Access by groups** — the GetCourse model: training/lesson access = group membership
+- 🧩 **5 focused tools** — status, find user, list groups, check membership, add to groups
+- 🪶 **TypeScript, ESM** — thin, strict, MIT, no account secrets in the repo
+
+## How access works in GetCourse
+
+Access to a training (and its lessons) is granted by **group membership**. "Full access" to a course often means membership in a *Module 1* group plus a group that starts the drip schedule (module 1 now, the rest on a timer). To "give access like another student", read their groups and reproduce them:
+
+```bash
+gc_find_user            # student@example.com → id, name
+gc_check_membership     # which of these groups is student X in?
+gc_add_user_to_groups   # add student Y to the same groups
+```
+
+## Requirements
+
+1. A Chromium-based browser (Chrome / Yandex) launched with a debug port on a **separate profile**, logged into your account:
+
    ```
    browser.exe --remote-debugging-port=9222 --user-data-dir=C:\gc-cdp-profile
    ```
-2. Node ≥ 18. `npm install`, затем задать `GETCOURSE_BASE_URL` / `GETCOURSE_CDP_URL`
-   (см. `.env.example` → скопировать в `.env`).
 
-## Инструменты
+2. Node ≥ 18.
 
-| Tool | Назначение |
-|------|-----------|
-| `gc_status` | Проверить, залогинен ли админ в браузере. |
-| `gc_find_user` | Найти пользователя по email (id, имя, тип, статус). |
-| `gc_list_training_groups` | Группы доступа тренинга (id + название). |
-| `gc_check_membership` | Состоит ли пользователь в группах (по списку пользователей — мгновенно). |
-| `gc_add_user_to_groups` | Добавить пользователя в группы = выдать доступ. `dryRun` — предпросмотр без коммита. |
-
-## Запуск
+## Setup
 
 ```bash
-npm run build && node dist/index.js          # MCP по stdio
-# или напрямую вызвать инструмент:
-npx tsx src/run.ts gc_find_user '{"email":"user@example.com"}'
-npx tsx src/run.ts gc_add_user_to_groups '{"email":"user@example.com","groupIds":["100001","100002"]}'
+npm install
+cp .env.example .env      # set GETCOURSE_BASE_URL (and GETCOURSE_CDP_URL if not :9222)
+npm run build
 ```
 
-## Заметки по реализации
+Register it with your MCP client (see `.mcp.json.example`):
 
-- **Выдача доступа** (`gc_add_user_to_groups`) идёт через форму «Добавление пользователей»
-  (`/pl/user/user/import?type=text`): email + выбор групп. Для **существующего** пользователя
-  обязателен флаг «перезаписать при совпадении» (`overwriteExisting`, по умолчанию `true`),
-  иначе группы не применяются; в импорте только email — данные профиля не теряются.
-- Прямой массовый экшен «Добавить в группу» существует
-  (`POST /pl/logic/operation/prepare?operationType=user_addtogroup`), но в текущем UI это
-  визард-выборка — сложнее в автоматизации; может появиться как альтернативный путь.
-- **Проверка членства** использует фильтр списка пользователей по правилу `user_ingrouprule`
-  (`params.value.selected_id`) — отражает членство мгновенно, в отличие от списка учеников тренинга.
+```json
+{
+  "mcpServers": {
+    "getcourse": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": { "GETCOURSE_BASE_URL": "https://your-account.getcourse.ru" }
+    }
+  }
+}
+```
 
-## Вклад (Contributing)
+## Tools
 
-Проект открыт для доработок — буду рад PR. Идеи: прямой массовый экшен `user_addtogroup`
-вместо импорта, инструмент «скопировать группы одного ученика другому», снятие/закрытие доступа,
-экспорт учеников, покрытие тестами.
+| Tool | Purpose |
+|------|---------|
+| `gc_status` | Check that an admin is logged in in the CDP browser. |
+| `gc_find_user` | Find a user by email → id, name, type, status. |
+| `gc_list_training_groups` | Access groups of a training (id + name). |
+| `gc_check_membership` | Is a user in the given groups? (instant, via the user list) |
+| `gc_add_user_to_groups` | Add a user to groups = grant access. `dryRun` previews without committing. |
 
-1. Форкните репозиторий и создайте ветку: `git checkout -b feature/my-change`.
-2. `npm install`, вносите правки, `npm run build` и `npx tsc --noEmit` должны проходить.
-3. Не коммитьте секреты (куки/пароли/`.env`) и данные реальных аккаунтов.
-4. Откройте Pull Request с кратким описанием, что и зачем.
+## Usage
 
-Issues с багами и предложениями тоже приветствуются.
+Run the MCP server over stdio, or call a tool directly for scripting:
 
-## Безопасность
+```bash
+node dist/index.js                                   # MCP (stdio)
 
-Секреты (куки/пароли) — только в браузере/окружении, никогда в репозитории. `.env` и локальный
-`.mcp.json` — в `.gitignore`.
+npx tsx src/run.ts gc_find_user '{"email":"user@example.com"}'
+# → Found: Jane Doe | user@example.com | student | active | id: 100200300
+
+npx tsx src/run.ts gc_add_user_to_groups \
+  '{"email":"user@example.com","groupIds":["100001","100002"]}'
+# → OK [done] import submitted
+
+npx tsx src/run.ts gc_check_membership \
+  '{"email":"user@example.com","groups":[{"id":"100001","name":"Module 1"}]}'
+# → ✅ Module 1 (100001)
+```
+
+## Implementation notes
+
+- **Granting access** (`gc_add_user_to_groups`) uses the bulk *Add users* form (`/pl/user/user/import?type=text`): email + selected groups. For an **existing** user the "overwrite on match" flag is required (`overwriteExisting`, default `true`), otherwise the groups are not applied — the import carries only the email, so no profile data is touched.
+- A direct mass action exists (`POST /pl/logic/operation/prepare?operationType=user_addtogroup`), but in the current UI it is a selection-builder wizard — a candidate to wire up as an alternative path.
+- **Membership** is checked through the user list filtered by a `user_ingrouprule` rule (`params.value.selected_id`), which reflects membership immediately (the training student list mirrors access asynchronously and is not reliable for verification).
+
+## Contributing
+
+Contributions are welcome — open an issue or a PR. Good first ideas:
+
+- direct `user_addtogroup` mass action instead of the import form
+- a "copy all groups from one student to another" tool
+- revoking access (`gc_remove_user_from_groups`)
+- exporting students; test coverage
+
+1. Fork and branch: `git checkout -b feature/my-change`
+2. `npm install`, make changes; `npm run build` and `npx tsc --noEmit` must pass
+3. **Never commit secrets** (cookies/passwords/`.env`) or real account data
+4. Open a PR describing what and why
+
+## Security
+
+Secrets (cookies/passwords) live only in the browser and your environment — never in the repo. `.env` and a local `.mcp.json` are git-ignored.
+
+## License
+
+MIT

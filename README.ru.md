@@ -1,0 +1,127 @@
+<div align="center">
+
+# getcourse-mcp
+
+**Автоматизация аккаунта [GetCourse](https://getcourse.ru) из AI-агента — выдача доступа к урокам/тренингам, управление пользователями и группами — без официального API.**
+
+[![npm version](https://img.shields.io/npm/v/getcourse-mcp?color=CB3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/getcourse-mcp)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![MCP](https://img.shields.io/badge/MCP-server-6E56CF)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![PRs welcome](https://img.shields.io/badge/PRs-welcome-34c759)
+
+[English](./README.md) · **Русский**
+
+<img src="assets/hero.svg" alt="getcourse-mcp — залогиненный браузер → MCP-сервер → GetCourse" width="100%">
+
+</div>
+
+## Зачем
+
+У GetCourse нет публичного API для того, что админ делает каждый день — открыть урок ученику, добавить в тренинг, переместить между группами. Эти действия живут только в админке.
+
+**getcourse-mcp** отдаёт их как инструменты [MCP](https://modelcontextprotocol.io). Сервер управляет **уже залогиненным браузером** по CDP, переиспользуя реальную session-cookie и CSRF — без выуживания паролей и без хрупких API-ключей. AI-агент (Claude и т.п.) может за один заход найти пользователя, посмотреть его группы и выдать доступ.
+
+- 🔑 **Живая сессия** — подключение по CDP к залогиненному Chromium/Yandex
+- 👥 **Доступ через группы** — модель GetCourse: доступ к тренингу/уроку = членство в группе
+- 🧩 **5 инструментов** — статус, поиск юзера, список групп, проверка членства, добавление в группы
+- 🪶 **TypeScript, ESM** — тонко, строго, MIT, без секретов аккаунта в репозитории
+
+## Как устроен доступ в GetCourse
+
+Доступ к тренингу (и его урокам) выдаётся **членством в группах**. «Полный доступ» к курсу часто = группа «Модуль 1» + группа, запускающая расписание (модуль 1 сейчас, остальные — по таймеру). Чтобы «выдать доступ как у другого ученика», смотрят его группы и повторяют их:
+
+```bash
+gc_find_user            # student@example.com → id, имя
+gc_check_membership     # в каких из этих групп состоит ученик X?
+gc_add_user_to_groups   # добавить ученика Y в те же группы
+```
+
+## Требования
+
+1. Браузер на Chromium (Chrome / Yandex), запущенный с debug-портом на **отдельном профиле** и с входом в аккаунт:
+
+   ```
+   browser.exe --remote-debugging-port=9222 --user-data-dir=C:\gc-cdp-profile
+   ```
+
+2. Node ≥ 18.
+
+## Настройка
+
+```bash
+npm install
+cp .env.example .env      # задать GETCOURSE_BASE_URL (и GETCOURSE_CDP_URL, если не :9222)
+npm run build
+```
+
+Подключение к MCP-клиенту (см. `.mcp.json.example`):
+
+```json
+{
+  "mcpServers": {
+    "getcourse": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": { "GETCOURSE_BASE_URL": "https://your-account.getcourse.ru" }
+    }
+  }
+}
+```
+
+## Инструменты
+
+| Инструмент | Назначение |
+|------------|-----------|
+| `gc_status` | Проверить, залогинен ли админ в браузере (CDP). |
+| `gc_find_user` | Найти пользователя по email → id, имя, тип, статус. |
+| `gc_list_training_groups` | Группы доступа тренинга (id + название). |
+| `gc_check_membership` | Состоит ли пользователь в группах? (мгновенно, по списку пользователей) |
+| `gc_add_user_to_groups` | Добавить в группы = выдать доступ. `dryRun` — предпросмотр без коммита. |
+
+## Использование
+
+Запуск MCP-сервера по stdio или прямой вызов инструмента для скриптов:
+
+```bash
+node dist/index.js                                   # MCP (stdio)
+
+npx tsx src/run.ts gc_find_user '{"email":"user@example.com"}'
+# → Найден: Иван Иванов | user@example.com | ученик | Активен | id: 100200300
+
+npx tsx src/run.ts gc_add_user_to_groups \
+  '{"email":"user@example.com","groupIds":["100001","100002"]}'
+# → OK [done] импорт отправлен
+
+npx tsx src/run.ts gc_check_membership \
+  '{"email":"user@example.com","groups":[{"id":"100001","name":"Модуль 1"}]}'
+# → ✅ Модуль 1 (100001)
+```
+
+## Заметки по реализации
+
+- **Выдача доступа** (`gc_add_user_to_groups`) идёт через форму «Добавление пользователей» (`/pl/user/user/import?type=text`): email + выбор групп. Для **существующего** пользователя обязателен флаг «перезаписать при совпадении» (`overwriteExisting`, по умолчанию `true`), иначе группы не применяются; в импорте только email — данные профиля не теряются.
+- Прямой массовый экшен существует (`POST /pl/logic/operation/prepare?operationType=user_addtogroup`), но в текущем UI это визард-выборка — кандидат на альтернативный путь.
+- **Проверка членства** — через фильтр списка пользователей по правилу `user_ingrouprule` (`params.value.selected_id`): отражает членство мгновенно (список учеников тренинга обновляется асинхронно и для проверки не годится).
+
+## Вклад (Contributing)
+
+Буду рад issue и PR. Хорошие идеи для старта:
+
+- прямой массовый экшен `user_addtogroup` вместо импорта
+- инструмент «скопировать все группы одного ученика другому»
+- снятие доступа (`gc_remove_user_from_groups`)
+- экспорт учеников; покрытие тестами
+
+1. Форк и ветка: `git checkout -b feature/my-change`
+2. `npm install`, правки; `npm run build` и `npx tsc --noEmit` должны проходить
+3. **Не коммитьте секреты** (куки/пароли/`.env`) и данные реальных аккаунтов
+4. Откройте PR с описанием, что и зачем
+
+## Безопасность
+
+Секреты (куки/пароли) — только в браузере и окружении, никогда в репозитории. `.env` и локальный `.mcp.json` в `.gitignore`.
+
+## Лицензия
+
+MIT
