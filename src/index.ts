@@ -7,6 +7,10 @@ import {
   gcListTrainingGroupsSchema, handleGcListTrainingGroups,
   gcCheckMembershipSchema, handleGcCheckMembership,
   gcAddUserToGroupsSchema, handleGcAddUserToGroups,
+  gcListUserGroupsSchema, handleGcListUserGroups,
+  gcAddToGroupsSchema, handleGcAddToGroups,
+  gcRemoveFromGroupsSchema, handleGcRemoveFromGroups,
+  gcCopyAccessSchema, handleGcCopyAccess,
 } from "./tools.js";
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
@@ -44,9 +48,37 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     "gc_add_user_to_groups",
-    "Добавить пользователя (по email) в одну или несколько групп = выдать доступ. dryRun — дойти до предпросмотра без подтверждения.",
+    "Добавить пользователя в группы через импорт (создаёт нового при отсутствии) = выдать доступ. dryRun — предпросмотр.",
     gcAddUserToGroupsSchema.shape,
     async (p) => text(await handleGcAddUserToGroups(p)),
+  );
+
+  server.tool(
+    "gc_list_user_groups",
+    "Список групп, в которых состоит пользователь (id + название). filter — подстрока по названию.",
+    gcListUserGroupsSchema.shape,
+    async (p) => text(await handleGcListUserGroups(p)),
+  );
+
+  server.tool(
+    "gc_add_to_groups",
+    "Добавить существующего пользователя в группы через карточку (чисто, без импорта; сохраняет остальные группы). dryRun — предпросмотр.",
+    gcAddToGroupsSchema.shape,
+    async (p) => text(await handleGcAddToGroups(p)),
+  );
+
+  server.tool(
+    "gc_remove_from_groups",
+    "Убрать пользователя из групп = закрыть доступ (сохраняет остальные группы). dryRun — предпросмотр.",
+    gcRemoveFromGroupsSchema.shape,
+    async (p) => text(await handleGcRemoveFromGroups(p)),
+  );
+
+  server.tool(
+    "gc_copy_access",
+    "Выдать пользователю такой же доступ, как у эталонного ученика (копирует его группы). filter — только группы с подстрокой. dryRun — предпросмотр.",
+    gcCopyAccessSchema.shape,
+    async (p) => text(await handleGcCopyAccess(p)),
   );
 
   return server;
@@ -56,7 +88,7 @@ async function main() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[getcourse-mcp] stdio server started (5 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
+  console.error("[getcourse-mcp] stdio server started (9 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
 }
 
 main().catch((e) => {

@@ -122,6 +122,197 @@ export async function findUser(s: GcSession, email: string): Promise<GcUser | nu
   }, email);
 }
 
+/** Resolve a user's numeric id from an email (throws if not found). */
+export async function resolveUserId(s: GcSession, email: string): Promise<string> {
+  const u = await findUser(s, email);
+  if (!u || !u.id) throw new Error(`Пользователь ${email} не найден.`);
+  return u.id;
+}
+
+// ── User groups via the profile card (checkbox tree) ──────────────────────────
+// The user card's "Группы" part is a checkbox tree: name="User[groupIds][]",
+// value=<groupId>, checked=membership. Saving persists the checked set. We
+// read-modify-write: toggle only the target groups, preserve everything else.
+
+/** Open the card groups tab in "Все группы" mode so every checkbox is rendered. */
+async function openGroupsTab(s: GcSession, userId: string): Promise<void> {
+  await goto(s, `/user/control/user/update/id/${userId}/part/groups`);
+  await s.page.waitForTimeout(800);
+  await s.page.evaluate(() => {
+    const a = Array.from(document.querySelectorAll("a")).find((e) => /Все группы/i.test((e as HTMLElement).innerText || ""));
+    (a as HTMLElement | undefined)?.click();
+  });
+  await s.page.waitForTimeout(1200);
+}
+
+function readCheckedGroups(s: GcSession): Promise<GcGroup[]> {
+  return s.page.evaluate(() =>
+    Array.from(document.querySelectorAll('input[name="User[groupIds][]"]'))
+      .filter((c) => (c as HTMLInputElement).checked)
+      .map((c) => ({
+        id: (c as HTMLInputElement).value,
+        name: ((c as HTMLElement).closest("label")?.innerText || (c as HTMLElement).parentElement?.innerText || "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      })),
+  );
+}
+
+/** List the groups a user (by id) currently belongs to. */
+export async function listUserGroups(s: GcSession, userId: string): Promise<GcGroup[]> {
+  await openGroupsTab(s, userId);
+  return readCheckedGroups(s);
+}
+
+export interface SetGroupsResult {
+  ok: boolean;
+  message: string;
+  before: string[];
+  after?: string[];
+}
+
+/**
+ * Add and/or remove a user from groups via the card checkbox tree.
+ * Only the target checkboxes are toggled; all other memberships are preserved.
+ * dryRun computes the change without saving.
+ */
+export async function setUserGroups(
+  s: GcSession,
+  userId: string,
+  opts: { add?: string[]; remove?: string[]; dryRun?: boolean },
+): Promise<SetGroupsResult> {
+  const add = opts.add ?? [];
+  const remove = opts.remove ?? [];
+  await openGroupsTab(s, userId);
+  const before = (await readCheckedGroups(s)).map((g) => g.id);
+
+  // every target must exist as a checkbox
+  const present = await s.page.evaluate(() =>
+    Array.from(document.querySelectorAll('input[name="User[groupIds][]"]')).map((c) => (c as HTMLInputElement).value),
+  );
+  const missing = [...add, ...remove].filter((id) => !present.includes(id));
+  if (missing.length) return { ok: false, message: `Группы не найдены на карточке: ${missing.join(", ")}`, before };
+
+  // toggle only targets (inline — no nested named fn, avoids esbuild __name helper)
+  await s.page.evaluate(
+    ({ add, remove }) => {
+      for (const id of add) {
+        const c = document.querySelector(`input[name="User[groupIds][]"][value="${id}"]`) as HTMLInputElement | null;
+        if (c && !c.checked) c.click();
+      }
+      for (const id of remove) {
+        const c = document.querySelector(`input[name="User[groupIds][]"][value="${id}"]`) as HTMLInputElement | null;
+        if (c && c.checked) c.click();
+      }
+    },
+    { add, remove },
+  );
+
+  const intended = new Set(before);
+  add.forEach((id) => intended.add(id));
+  remove.forEach((id) => intended.delete(id));
+  const nowChecked = (await readCheckedGroups(s)).map((g) => g.id).sort();
+  const want = [...intended].sort();
+  if (JSON.stringify(nowChecked) !== JSON.stringify(want)) {
+    return { ok: false, message: `Состояние чекбоксов не совпало с ожидаемым (до сохранения). want=${want.length}, got=${nowChecked.length}`, before };
+  }
+
+  if (opts.dryRun) {
+    return { ok: true, message: `dryRun: +[${add.join(",")}] −[${remove.join(",")}]. Не сохранено.`, before };
+  }
+
+  // save (submit the groups form)
+  await s.page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('#userForm button, #userForm input[type="submit"], button, a.btn')).find(
+      (b) => /сохранить/i.test((b as HTMLElement).innerText || (b as HTMLInputElement).value || ""),
+    ) as HTMLElement | undefined;
+    btn?.click();
+  });
+  await s.page.waitForTimeout(2500);
+
+  const after = await listUserGroups(s, userId);
+  return { ok: true, message: "Сохранено.", before, after: after.map((g) => g.id) };
+}
+
+// ── Update user profile ───────────────────────────────────────────────────────
+
+export interface UserFields {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  city?: string;
+  comment?: string;
+}
+
+const USER_FIELD_MAP: Record<keyof UserFields, string> = {
+  firstName: "User[first_name]",
+  lastName: "User[last_name]",
+  phone: "User[phone]",
+  city: "User[city]",
+  comment: "User[comment]",
+};
+
+/**
+ * Update profile fields (name/phone/city/comment) on the user card and save.
+ * Email is intentionally out of scope (sensitive — separate flow). dryRun sets
+ * the values but does not submit.
+ */
+export async function updateUser(
+  s: GcSession,
+  userId: string,
+  fields: UserFields,
+  dryRun = false,
+): Promise<{ ok: boolean; message: string; before: Record<string, string>; after?: Record<string, string> }> {
+  await goto(s, `/user/control/user/update/id/${userId}`);
+  await s.page.waitForTimeout(1200);
+
+  const entries = (Object.keys(fields) as (keyof UserFields)[])
+    .filter((k) => fields[k] !== undefined)
+    .map((k) => [USER_FIELD_MAP[k], String(fields[k])] as [string, string]);
+  if (!entries.length) return { ok: false, message: "Нечего обновлять.", before: {} };
+
+  const names = entries.map((e) => e[0]);
+  const readValues = (ns: string[]) =>
+    s.page.evaluate((names) => {
+      const out: Record<string, string> = {};
+      for (const n of names) {
+        const el = document.querySelector(`[name="${n}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+        out[n] = el ? el.value : "__MISSING__";
+      }
+      return out;
+    }, ns);
+
+  const before = await readValues(names);
+  const missing = names.filter((n) => before[n] === "__MISSING__");
+  if (missing.length) return { ok: false, message: `Поля не найдены в форме: ${missing.join(", ")}`, before };
+
+  await s.page.evaluate((entries) => {
+    for (const [name, val] of entries) {
+      const el = document.querySelector(`[name="${name}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (el) {
+        el.value = val;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+  }, entries);
+
+  if (dryRun) return { ok: true, message: `dryRun: ${entries.map((e) => `${e[0]}=${e[1]}`).join(", ")}. Не сохранено.`, before };
+
+  await s.page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('#userForm button, #userForm input[type="submit"], button, a.btn')).find(
+      (b) => /сохранить/i.test((b as HTMLElement).innerText || (b as HTMLInputElement).value || ""),
+    ) as HTMLElement | undefined;
+    btn?.click();
+  });
+  await s.page.waitForTimeout(2500);
+
+  await goto(s, `/user/control/user/update/id/${userId}`);
+  await s.page.waitForTimeout(1000);
+  const after = await readValues(names);
+  return { ok: true, message: "Сохранено.", before, after };
+}
+
 // ── Training groups ───────────────────────────────────────────────────────────
 
 export interface GcGroup {

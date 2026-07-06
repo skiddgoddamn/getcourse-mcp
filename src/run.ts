@@ -10,6 +10,10 @@ import {
   handleGcListTrainingGroups, gcListTrainingGroupsSchema,
   handleGcCheckMembership, gcCheckMembershipSchema,
   handleGcAddUserToGroups, gcAddUserToGroupsSchema,
+  handleGcListUserGroups, gcListUserGroupsSchema,
+  handleGcAddToGroups, gcAddToGroupsSchema,
+  handleGcRemoveFromGroups, gcRemoveFromGroupsSchema,
+  handleGcCopyAccess, gcCopyAccessSchema,
 } from "./tools.js";
 
 const tool = process.argv[2];
@@ -22,6 +26,10 @@ const dispatch: Record<string, () => Promise<string>> = {
   gc_list_training_groups: () => handleGcListTrainingGroups(gcListTrainingGroupsSchema.parse(args)),
   gc_check_membership: () => handleGcCheckMembership(gcCheckMembershipSchema.parse(args)),
   gc_add_user_to_groups: () => handleGcAddUserToGroups(gcAddUserToGroupsSchema.parse(args)),
+  gc_list_user_groups: () => handleGcListUserGroups(gcListUserGroupsSchema.parse(args)),
+  gc_add_to_groups: () => handleGcAddToGroups(gcAddToGroupsSchema.parse(args)),
+  gc_remove_from_groups: () => handleGcRemoveFromGroups(gcRemoveFromGroupsSchema.parse(args)),
+  gc_copy_access: () => handleGcCopyAccess(gcCopyAccessSchema.parse(args)),
 };
 
 const fn = dispatch[tool];
