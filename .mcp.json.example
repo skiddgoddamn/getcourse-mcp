@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "getcourse": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "GETCOURSE_BASE_URL": "https://your-account.getcourse.ru",
+        "GETCOURSE_CDP_URL": "http://127.0.0.1:9222"
+      }
+    }
+  }
+}

@@ -1,0 +1,41 @@
+/**
+ * CLI runner — invoke a plugin tool handler directly.
+ *   tsx src/run.ts <tool> '<jsonArgs>'
+ * Example:
+ *   tsx src/run.ts gc_find_user '{"email":"user@example.com"}'
+ */
+import {
+  handleGcStatus,
+  handleGcFindUser, gcFindUserSchema,
+  handleGcListTrainingGroups, gcListTrainingGroupsSchema,
+  handleGcCheckMembership, gcCheckMembershipSchema,
+  handleGcAddUserToGroups, gcAddUserToGroupsSchema,
+} from "./tools.js";
+
+const tool = process.argv[2];
+const rawArgs = process.argv[3] || "{}";
+const args = JSON.parse(rawArgs);
+
+const dispatch: Record<string, () => Promise<string>> = {
+  gc_status: () => handleGcStatus(),
+  gc_find_user: () => handleGcFindUser(gcFindUserSchema.parse(args)),
+  gc_list_training_groups: () => handleGcListTrainingGroups(gcListTrainingGroupsSchema.parse(args)),
+  gc_check_membership: () => handleGcCheckMembership(gcCheckMembershipSchema.parse(args)),
+  gc_add_user_to_groups: () => handleGcAddUserToGroups(gcAddUserToGroupsSchema.parse(args)),
+};
+
+const fn = dispatch[tool];
+if (!fn) {
+  console.error(`Unknown tool "${tool}". Available: ${Object.keys(dispatch).join(", ")}`);
+  process.exit(2);
+}
+
+fn()
+  .then((out) => {
+    console.log(out);
+    process.exit(0);
+  })
+  .catch((e) => {
+    console.error("ERROR:", e.message || e);
+    process.exit(1);
+  });

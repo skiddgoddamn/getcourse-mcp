@@ -1,0 +1,38 @@
+{
+  "name": "getcourse-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for GetCourse account automation (lesson access, users, trainings) via the logged-in session cookie.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "getcourse-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "playwright-core": "^1.61.0",
+    "undici": "^6.21.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.1"
+  },
+  "mcpName": "io.github.skiddgoddamn/getcourse-mcp",
+  "license": "MIT",
+  "author": "skiddgoddamn (https://github.com/skiddgoddamn)"
+}

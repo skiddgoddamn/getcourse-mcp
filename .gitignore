@@ -1,0 +1,30 @@
+# Dependencies / build
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.local
+cookies.json
+*.cookie
+session.json
+
+# Local MCP config may contain the session cookie
+.mcp.json
+!.mcp.json.example
+
+# Specs & plans — kept local, not published (per project owner)
+docs/superpowers/
+
+# Discovery scratch (may contain account data)
+docs/endpoints.md
+.discovery/
+.tmp*/
+
+# OS / editor
+.DS_Store
+Thumbs.db
