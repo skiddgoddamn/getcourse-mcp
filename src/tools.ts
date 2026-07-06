@@ -9,6 +9,13 @@ import {
   setUserGroups,
   checkMembership,
   addUserToGroups,
+  updateUser,
+  findOffers,
+  findUserOrders,
+  createOrder,
+  setOrderStatus,
+  listMailingCategories,
+  setMailingCategory,
   type GcGroup,
 } from "./gc.js";
 
@@ -163,5 +170,144 @@ export async function handleGcCopyAccess(p: z.infer<typeof gcCopyAccessSchema>):
     const r = await setUserGroups(s, toId, { add: src.map((g) => g.id), dryRun: p.dryRun });
     const list = src.map((g) => `• ${g.name} (${g.id})`).join("\n");
     return `${r.ok ? "OK" : "FAIL"} ${r.message}\nКопируем ${src.length} групп(ы):\n${list}`;
+  });
+}
+
+// gc_update_user — edit profile fields on the card (email is out of scope)
+export const gcUpdateUserSchema = z.object({
+  email: z.string().describe("Email пользователя."),
+  firstName: z.string().optional().describe("Имя."),
+  lastName: z.string().optional().describe("Фамилия."),
+  phone: z.string().optional().describe("Телефон."),
+  city: z.string().optional().describe("Город."),
+  comment: z.string().optional().describe("Комментарий."),
+  dryRun: z.boolean().optional().describe("Заполнить поля без сохранения."),
+});
+export async function handleGcUpdateUser(p: z.infer<typeof gcUpdateUserSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const { email: _e, dryRun, ...fields } = p;
+    const r = await updateUser(s, id, fields, dryRun);
+    const diff = r.after
+      ? "\n" + Object.keys(r.after).map((k) => `• ${k}: «${r.before[k] ?? ""}» → «${r.after![k]}»`).join("\n")
+      : "";
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}${diff}`;
+  });
+}
+
+// gc_find_offers — search sales offers by name (for gc_create_order)
+export const gcFindOffersSchema = z.object({
+  query: z.string().describe("Подстрока названия оффера (например «Формула AI Полный доступ»)."),
+});
+export async function handleGcFindOffers(p: z.infer<typeof gcFindOffersSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const offers = await findOffers(s, p.query);
+    if (!offers.length) return "Офферы не найдены.";
+    return offers.map((o) => `${o.id}\t${o.actual ? "✅" : "—"} ${o.price}\t${o.text}`).join("\n");
+  });
+}
+
+// gc_find_orders — list a user's orders (deals)
+export const gcFindOrdersSchema = z.object({
+  email: z.string().describe("Email пользователя."),
+});
+export async function handleGcFindOrders(p: z.infer<typeof gcFindOrdersSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const orders = await findUserOrders(s, id);
+    if (!orders.length) return "Заказов нет.";
+    return orders.map((o) => `${o.dealId}\t${o.status || "?"}\t${o.amount}\t${o.text}`).join("\n");
+  });
+}
+
+// gc_create_order (write) — create an order = grant access via a purchase.
+// For "только купившие" trainings this is the ONLY way to open access (groups don't).
+export const gcCreateOrderSchema = z.object({
+  email: z.string().describe("Email пользователя (существующий)."),
+  offerIds: z.array(z.string()).min(1).describe("ID офферов (см. gc_find_offers). 0₽ комп-оффер = доступ без денег."),
+  tryPayFromDeposit: z.boolean().optional().describe("Попытаться оплатить с депозита (по умолчанию false)."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Только эхо, БЕЗ создания. ВНИМАНИЕ: при dryRun=false заказ создаётся сразу — у операции нет предпросмотра."),
+});
+export async function handleGcCreateOrder(p: z.infer<typeof gcCreateOrderSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const r = await createOrder(s, id, p.offerIds, { dryRun: p.dryRun, tryPayFromDeposit: p.tryPayFromDeposit });
+    const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
+  });
+}
+
+// gc_set_order_status (write) — change a deal's status (e.g. cancel a duplicate)
+export const gcSetOrderStatusSchema = z.object({
+  dealId: z.string().describe("ID сделки (из gc_find_orders или URL /sales/control/deal/update/id/<id>)."),
+  status: z
+    .enum(["new", "not_confirmed", "in_work", "cancelled", "false", "payment_waiting", "part_payed", "waiting_for_return", "pending"])
+    .describe("Новый статус сделки."),
+  cancelReasonId: z.string().optional().describe("ID причины отмены для status=cancelled (напр. «Дубль заказа»=54347 на li-ft.ru)."),
+});
+export async function handleGcSetOrderStatus(p: z.infer<typeof gcSetOrderStatusSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const r = await setOrderStatus(s, p.dealId, p.status, { cancelReasonId: p.cancelReasonId });
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}${r.status ? ` Текущий статус: ${r.status}` : ""}`;
+  });
+}
+
+// gc_user_summary — one call: profile + groups + orders (composes reads, one session)
+export const gcUserSummarySchema = z.object({
+  email: z.string().describe("Email пользователя."),
+});
+export async function handleGcUserSummary(p: z.infer<typeof gcUserSummarySchema>): Promise<string> {
+  return withSession(async (s) => {
+    const u = await findUser(s, p.email);
+    if (!u || !u.id) return `Пользователь ${p.email} не найден.`;
+    const groups = await listUserGroups(s, u.id);
+    const orders = await findUserOrders(s, u.id);
+    const g = groups.length ? groups.map((x) => `  • ${x.name} (${x.id})`).join("\n") : "  (нет)";
+    const o = orders.length ? orders.map((x) => `  • ${x.dealId} ${x.status || "?"} ${x.amount} — ${x.text}`).join("\n") : "  (нет)";
+    return `${u.name} | ${u.email} | ${u.type} | ${u.status} | id: ${u.id}\nГруппы (${groups.length}):\n${g}\nЗаказы (${orders.length}):\n${o}`;
+  });
+}
+
+// gc_list_mailing_categories — mailing categories (tag-like segmentation) id + name
+export const gcListMailingCategoriesSchema = z.object({
+  email: z.string().describe("Email любого пользователя (список категорий общий для аккаунта)."),
+});
+export async function handleGcListMailingCategories(p: z.infer<typeof gcListMailingCategoriesSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const cats = await listMailingCategories(s, id);
+    if (!cats.length) return "Категории рассылок не найдены.";
+    return cats.map((c) => `${c.id}\t${c.name}`).join("\n");
+  });
+}
+
+// gc_add_to_mailing_category (write)
+export const gcAddToMailingCategorySchema = z.object({
+  email: z.string().describe("Email пользователя."),
+  categoryId: z.string().describe("ID категории рассылок (см. gc_list_mailing_categories)."),
+});
+export async function handleGcAddToMailingCategory(p: z.infer<typeof gcAddToMailingCategorySchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const r = await setMailingCategory(s, id, p.categoryId, true);
+    const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
+  });
+}
+
+// gc_remove_from_mailing_category (write)
+export const gcRemoveFromMailingCategorySchema = z.object({
+  email: z.string().describe("Email пользователя."),
+  categoryId: z.string().describe("ID категории рассылок (см. gc_list_mailing_categories)."),
+});
+export async function handleGcRemoveFromMailingCategory(p: z.infer<typeof gcRemoveFromMailingCategorySchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const r = await setMailingCategory(s, id, p.categoryId, false);
+    const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
   });
 }

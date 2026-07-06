@@ -11,12 +11,21 @@ import {
   gcAddToGroupsSchema, handleGcAddToGroups,
   gcRemoveFromGroupsSchema, handleGcRemoveFromGroups,
   gcCopyAccessSchema, handleGcCopyAccess,
+  gcUpdateUserSchema, handleGcUpdateUser,
+  gcFindOffersSchema, handleGcFindOffers,
+  gcFindOrdersSchema, handleGcFindOrders,
+  gcCreateOrderSchema, handleGcCreateOrder,
+  gcSetOrderStatusSchema, handleGcSetOrderStatus,
+  gcUserSummarySchema, handleGcUserSummary,
+  gcListMailingCategoriesSchema, handleGcListMailingCategories,
+  gcAddToMailingCategorySchema, handleGcAddToMailingCategory,
+  gcRemoveFromMailingCategorySchema, handleGcRemoveFromMailingCategory,
 } from "./tools.js";
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "getcourse-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "getcourse-mcp", version: "0.2.0" });
 
   server.tool(
     "gc_status",
@@ -81,6 +90,69 @@ export function createMcpServer(): McpServer {
     async (p) => text(await handleGcCopyAccess(p)),
   );
 
+  server.tool(
+    "gc_update_user",
+    "Изменить поля профиля на карточке (имя/фамилия/телефон/город/комментарий). Email вне области. dryRun — без сохранения.",
+    gcUpdateUserSchema.shape,
+    async (p) => text(await handleGcUpdateUser(p)),
+  );
+
+  server.tool(
+    "gc_find_offers",
+    "Найти офферы продажи по подстроке названия (id + цена + актуальность). Нужно для gc_create_order.",
+    gcFindOffersSchema.shape,
+    async (p) => text(await handleGcFindOffers(p)),
+  );
+
+  server.tool(
+    "gc_find_orders",
+    "Список заказов (сделок) пользователя по email: dealId + статус + сумма.",
+    gcFindOrdersSchema.shape,
+    async (p) => text(await handleGcFindOrders(p)),
+  );
+
+  server.tool(
+    "gc_create_order",
+    "Создать заказ по офферам = выдать доступ покупкой (для тренингов «только купившие» группы доступ НЕ дают). 0₽ комп-оффер = доступ без денег. ⚠️ dryRun=false создаёт заказ СРАЗУ (без предпросмотра).",
+    gcCreateOrderSchema.shape,
+    async (p) => text(await handleGcCreateOrder(p)),
+  );
+
+  server.tool(
+    "gc_set_order_status",
+    "Изменить статус сделки (напр. отменить дубль: status=cancelled + cancelReasonId).",
+    gcSetOrderStatusSchema.shape,
+    async (p) => text(await handleGcSetOrderStatus(p)),
+  );
+
+  server.tool(
+    "gc_user_summary",
+    "Сводка по пользователю за один вызов: профиль + группы + заказы.",
+    gcUserSummarySchema.shape,
+    async (p) => text(await handleGcUserSummary(p)),
+  );
+
+  server.tool(
+    "gc_list_mailing_categories",
+    "Список категорий рассылок (tag-подобная сегментация): id + название. GetCourse не имеет свободных user-тегов — это группы + категории рассылок.",
+    gcListMailingCategoriesSchema.shape,
+    async (p) => text(await handleGcListMailingCategories(p)),
+  );
+
+  server.tool(
+    "gc_add_to_mailing_category",
+    "Добавить пользователя в категорию рассылок (по categoryId из gc_list_mailing_categories).",
+    gcAddToMailingCategorySchema.shape,
+    async (p) => text(await handleGcAddToMailingCategory(p)),
+  );
+
+  server.tool(
+    "gc_remove_from_mailing_category",
+    "Убрать пользователя из категории рассылок (по categoryId).",
+    gcRemoveFromMailingCategorySchema.shape,
+    async (p) => text(await handleGcRemoveFromMailingCategory(p)),
+  );
+
   return server;
 }
 
@@ -88,7 +160,7 @@ async function main() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[getcourse-mcp] stdio server started (9 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
+  console.error("[getcourse-mcp] stdio server started (18 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
 }
 
 main().catch((e) => {

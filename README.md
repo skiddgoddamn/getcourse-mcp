@@ -76,8 +76,21 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_status` | Check that an admin is logged in in the CDP browser. |
 | `gc_find_user` | Find a user by email → id, name, type, status. |
 | `gc_list_training_groups` | Access groups of a training (id + name). |
+| `gc_list_user_groups` | Groups a user belongs to (id + name). |
 | `gc_check_membership` | Is a user in the given groups? (instant, via the user list) |
-| `gc_add_user_to_groups` | Add a user to groups = grant access. `dryRun` previews without committing. |
+| `gc_add_to_groups` | Add an existing user to groups via the card (preserves other groups). `dryRun`. |
+| `gc_remove_from_groups` | Remove a user from groups = revoke access. `dryRun`. |
+| `gc_add_user_to_groups` | Add via the bulk import (creates the user if new) = grant access. `dryRun`. |
+| `gc_copy_access` | Give a user the same groups as a reference student. `dryRun`. |
+| `gc_update_user` | Edit card fields (first/last name, phone, city, comment). Email is out of scope. `dryRun`. |
+| `gc_find_offers` | Search sales offers by name → id + price + actuality. |
+| `gc_find_orders` | List a user's orders (dealId + status). |
+| `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). ⚠️ single-step: `dryRun:false` creates the order immediately. |
+| `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`). |
+| `gc_user_summary` | One call: profile + groups + orders for a user. |
+| `gc_list_mailing_categories` | List mailing categories (tag-like segmentation) — id + name. |
+| `gc_add_to_mailing_category` | Add a user to a mailing category. |
+| `gc_remove_from_mailing_category` | Remove a user from a mailing category. |
 
 ## Usage
 
