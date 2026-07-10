@@ -730,6 +730,264 @@ export async function setOrderStatus(
   return { ok: true, message: "Смена статуса отправлена.", status: cur };
 }
 
+// ── Refunds (Геткурс payment module / gcpay) ──────────────────────────────────
+// Real money refunds exist only for payments processed through the Геткурс
+// platform: the payment page (/sales/control/payment/update/id/<pid>) carries an
+// «Оформить возврат» link into the payment module
+// (/pl/gcpay/client/refund/create?GCPayment[id]=<operationId>). The form lists
+// the parent operation's positions; each position REQUIRES a VAT rate that must
+// mirror the original receipt (чек «нет налога» → «без НДС»). Submitting files a
+// refund request the platform then processes (money back to the buyer's card).
+// Flipping Payment[status] to «Возвращен» by hand is bookkeeping only — no money
+// moves — so this flow drives gcpay, not the status select.
+
+export interface DealPayment {
+  paymentId: string;
+  /** Row text around the payment link (type + statuses + amount). */
+  text: string;
+}
+
+/** Payments (/sales/control/payment/update/id/<id>) referenced by a deal page. */
+export async function listDealPayments(s: GcSession, dealId: string): Promise<DealPayment[]> {
+  await goto(s, `/sales/control/deal/update/id/${dealId}`);
+  await s.page.waitForTimeout(1000);
+  return s.page.evaluate(() => {
+    const out: { paymentId: string; text: string }[] = [];
+    const seen = new Set<string>();
+    document.querySelectorAll('a[href*="/sales/control/payment/update/id/"]').forEach((a) => {
+      const id = ((a.getAttribute("href") || "").match(/id\/(\d+)/) || [])[1] || "";
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const row = (a as HTMLElement).closest("tr,li,div");
+      out.push({
+        paymentId: id,
+        text: ((row as HTMLElement)?.innerText || (a as HTMLElement).innerText || "").replace(/\s+/g, " ").trim().slice(0, 140),
+      });
+    });
+    return out;
+  });
+}
+
+/** Exact option labels of the refund form VAT select, keyed by tool-level alias. */
+export const REFUND_VAT_LABELS: Record<string, string> = {
+  none: "без НДС",
+  "0": "НДС по ставке 0%",
+  "5": "НДС 5%",
+  "7": "НДС 7%",
+  "10": "НДС 10%",
+  "20": "НДС 20%",
+  "22": "НДС 22%",
+};
+
+export interface RefundOrderResult {
+  ok: boolean;
+  step: string;
+  message: string;
+  /** Filled when the deal has several payments and paymentId must be chosen. */
+  payments?: DealPayment[];
+}
+
+/**
+ * File a money refund for a deal's payment via the Геткурс payment module.
+ * Resolves the deal's payment → follows «Оформить возврат» → fills VAT (and an
+ * optional partial amount for single-position refunds) → submits «Создать
+ * возврат» → verifies the request appears in /pl/gcpay/client/refund/index.
+ * dryRun fills the form and reports the summary WITHOUT submitting.
+ * Payments not processed by the Геткурс platform have no refund link — fails
+ * with a clear message (manual bank-side refund + status bookkeeping needed).
+ */
+export async function refundOrder(
+  s: GcSession,
+  dealId: string,
+  opts: { paymentId?: string; amount?: number; vat?: string; dryRun?: boolean } = {},
+): Promise<RefundOrderResult> {
+  const { amount, vat = "none", dryRun = false } = opts;
+  const vatLabel = REFUND_VAT_LABELS[vat];
+  if (!vatLabel) {
+    return { ok: false, step: "args", message: `Неизвестная ставка НДС «${vat}». Допустимо: ${Object.keys(REFUND_VAT_LABELS).join(", ")}.` };
+  }
+
+  // 1) locate the payment on the deal
+  const payments = await listDealPayments(s, dealId);
+  if (!payments.length) return { ok: false, step: "deal", message: `На сделке ${dealId} платежи не найдены.` };
+  let paymentId = opts.paymentId;
+  if (!paymentId) {
+    if (payments.length > 1) {
+      return { ok: false, step: "deal", message: `На сделке ${dealId} несколько платежей — укажите paymentId.`, payments };
+    }
+    paymentId = payments[0].paymentId;
+  }
+
+  // 2) payment page → amount/status/type + «Оформить возврат» link (gcpay only)
+  await goto(s, `/sales/control/payment/update/id/${paymentId}`);
+  await s.page.waitForTimeout(1000);
+  const pay = await s.page.evaluate(() => {
+    // no named inner fns — esbuild's __name helper doesn't exist in the page
+    const cur = document.querySelector('select[name="Payment[currency]"]') as HTMLSelectElement | null;
+    const st = document.querySelector('select[name="Payment[status]"]') as HTMLSelectElement | null;
+    const ty = document.querySelector('select[name="Payment[type]"]') as HTMLSelectElement | null;
+    const link = Array.from(document.querySelectorAll("a")).find((a) =>
+      /gcpay\/client\/refund\/create/.test(a.getAttribute("href") || ""),
+    );
+    return {
+      amount: (document.querySelector('input[name="Payment[amount]"]') as HTMLInputElement | null)?.value || "?",
+      currency: cur ? (cur.selectedOptions[0]?.text || "").trim() : "",
+      status: st ? (st.selectedOptions[0]?.text || "").trim() : "",
+      type: ty ? (ty.selectedOptions[0]?.text || "").trim() : "",
+      refundHref: link ? link.getAttribute("href") : null,
+    };
+  });
+  const payDesc = `${paymentId} (${pay.type || "?"}, ${pay.amount} ${pay.currency}, статус «${pay.status}»)`;
+  if (/Возвращен/i.test(pay.status)) return { ok: false, step: "payment", message: `Платёж ${payDesc} уже возвращён.` };
+  if (!pay.refundHref) {
+    return {
+      ok: false,
+      step: "payment",
+      message:
+        `Платёж ${payDesc} не проведён через платформу Геткурс — ссылки «Оформить возврат» нет. ` +
+        `Автовозврат денег недоступен; возврат делается на стороне платёжной системы вручную.`,
+    };
+  }
+  const opId = (pay.refundHref.match(/GCPayment(?:%5B|\[)id(?:%5D|\])=(\d+)/) || [])[1] || "?";
+
+  // 3) refund form: positions + already-refunded sum
+  await goto(s, pay.refundHref);
+  await s.page.waitForTimeout(1500);
+  const form = await s.page.evaluate(() => {
+    const f = document.getElementById("client-gcpay-create-refund") as HTMLFormElement | null;
+    if (!f) return null;
+    const positions = Array.from(f.querySelectorAll('input[name^="GcRefundPosition[price]["]')).map((i) => ({
+      name: i.getAttribute("name") || "",
+      price: (i as HTMLInputElement).value,
+    }));
+    const body = document.body.innerText.replace(/\s+/g, " ");
+    return {
+      positions,
+      already: ((body.match(/Сумма уже выполненных возвратов[^\d]*([\d\s.,]+)\s*руб/) || [])[1] || "?").trim(),
+      email: (document.querySelector('input[name="User[email]"]') as HTMLInputElement | null)?.value || "",
+    };
+  });
+  if (!form) return { ok: false, step: "refund-form", message: "Форма client-gcpay-create-refund не найдена — платёжный модуль изменился?" };
+  if (!form.positions.length) {
+    return { ok: false, step: "refund-form", message: `На форме возврата нет товарных позиций (уже возвращено: ${form.already} руб.) — возможно, возврат уже выполнен полностью.` };
+  }
+
+  // optional partial amount (single position only — per-position split is out of scope)
+  if (amount !== undefined) {
+    if (form.positions.length > 1) {
+      return { ok: false, step: "refund-form", message: `Позиций на форме: ${form.positions.length} — amount поддерживается только для одной позиции. Уберите amount (полный возврат) или оформите вручную.` };
+    }
+    await s.page.evaluate(
+      ({ name, value }) => {
+        const i = document.querySelector(`input[name="${name}"]`) as HTMLInputElement | null;
+        if (i) {
+          i.value = value;
+          i.dispatchEvent(new Event("input", { bubbles: true }));
+          i.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      },
+      { name: form.positions[0].name, value: String(amount) },
+    );
+  }
+
+  // VAT is required on every position; match the option by its exact label
+  const vatSet = await s.page.evaluate((label: string) => {
+    const sels = Array.from(
+      document.querySelectorAll('#client-gcpay-create-refund select[name^="GcRefundPosition[vat_id]["]'),
+    ) as HTMLSelectElement[];
+    let okCount = 0;
+    for (const sel of sels) {
+      const opt = Array.from(sel.options).find((o) => o.text.trim() === label);
+      if (!opt) continue;
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      okCount++;
+    }
+    return { total: sels.length, okCount };
+  }, vatLabel);
+  if (!vatSet.total || vatSet.okCount !== vatSet.total) {
+    return { ok: false, step: "refund-form", message: `Не удалось выставить НДС «${vatLabel}» (${vatSet.okCount}/${vatSet.total} позиций).` };
+  }
+
+  const posSummary = form.positions
+    .map((p) => `${(p.name.match(/\[(\d+)\]$/) || [])[1] || "?"}=${amount !== undefined ? amount : p.price}`)
+    .join(", ");
+  if (dryRun) {
+    return {
+      ok: true,
+      step: "refund-form",
+      message:
+        `dryRun: форма возврата заполнена, НЕ отправлена. Платёж ${payDesc}, операция gcpay ${opId}, ` +
+        `уже возвращено: ${form.already} руб., позиции (сумма): ${posSummary}, НДС: «${vatLabel}».`,
+    };
+  }
+
+  // 4) «Создать возврат» only OPENS a confirm modal («Вы действительно хотите
+  //    создать возврат?…») — the actual submit is the modal's «Да, создать».
+  const clicked = await s.page.evaluate(() => {
+    const btn = Array.from(
+      document.querySelectorAll('#client-gcpay-create-refund button, #client-gcpay-create-refund input[type="submit"], #client-gcpay-create-refund a.btn'),
+    ).find((b) => /Создать возврат/i.test(((b as HTMLElement).innerText || (b as HTMLInputElement).value || "").trim())) as
+      | HTMLElement
+      | undefined;
+    btn?.click();
+    return !!btn;
+  });
+  if (!clicked) return { ok: false, step: "submit", message: "Кнопка «Создать возврат» на форме не найдена." };
+  await s.page.waitForTimeout(1200);
+
+  const modalText = await s.page.evaluate(() => {
+    const m = document.querySelector('.modal.in, .modal.show, .modal[style*="display: block"]');
+    return m ? ((m as HTMLElement).innerText || "").replace(/\s+/g, " ").trim().slice(0, 300) : null;
+  });
+  if (!modalText || !/создать возврат/i.test(modalText)) {
+    return { ok: false, step: "confirm", message: `Модалка подтверждения возврата не появилась. На странице: ${modalText || "(нет модалки)"}` };
+  }
+  const modalSum = (modalText.match(/Общая сумма возврата\s*([\d\s.,]+)/) || [])[1]?.trim() || "?";
+  const confirmed = await s.page.evaluate(() => {
+    const m = document.querySelector('.modal.in, .modal.show, .modal[style*="display: block"]');
+    if (!m) return false;
+    const btn = Array.from(m.querySelectorAll('button, input[type="submit"], a.btn')).find((b) =>
+      /Да, создать/i.test(((b as HTMLElement).innerText || (b as HTMLInputElement).value || "").trim()),
+    ) as HTMLElement | undefined;
+    btn?.click();
+    return !!btn;
+  });
+  if (!confirmed) return { ok: false, step: "confirm", message: `Кнопка «Да, создать» в модалке не найдена. Модалка: ${modalText}` };
+  await s.page.waitForTimeout(4000);
+
+  const after = await s.page.evaluate(() => {
+    const errEl = document.querySelector(".alert-danger, .error-summary, .has-error .help-block, .field-error");
+    return {
+      url: location.href,
+      error: errEl ? ((errEl as HTMLElement).innerText || "").replace(/\s+/g, " ").trim().slice(0, 300) : null,
+      snippet: (document.body.innerText || "").replace(/\s+/g, " ").trim().slice(0, 250),
+    };
+  });
+  if (after.error) return { ok: false, step: "submit", message: `Форма вернула ошибку: ${after.error}` };
+
+  // 5) verify: the new refund request must show up in the refunds registry
+  await goto(s, "/pl/gcpay/client/refund/index");
+  await s.page.waitForTimeout(1500);
+  const verify = await s.page.evaluate(
+    ({ opId, email }) => {
+      const rows = Array.from(document.querySelectorAll("table tr"))
+        .map((tr) => ((tr as HTMLElement).innerText || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const hit = rows.find((r) => (opId !== "?" && r.includes(opId)) || (email && r.includes(email)));
+      return { hit: hit ? hit.slice(0, 220) : null, top: rows.slice(1, 4).map((r) => r.slice(0, 160)) };
+    },
+    { opId, email: form.email },
+  );
+  return {
+    ok: !!verify.hit,
+    step: "done",
+    message: verify.hit
+      ? `Возврат создан на ${modalSum}. Платёж ${payDesc}, операция gcpay ${opId}. Запись в реестре возвратов: ${verify.hit}`
+      : `Возврат подтверждён в модалке (сумма ${modalSum}, страница: ${after.url}), но запись в реестре возвратов не найдена — проверьте /pl/gcpay/client/refund/index вручную. Верх реестра: ${verify.top.join(" | ") || "(пусто)"}`,
+  };
+}
+
 // ── Mailing categories (tag-like user segmentation) ─────────────────────────────
 // GetCourse has NO free-form user "tags" — user segmentation = groups (see
 // setUserGroups) + mailing categories. The card ops «Добавить/Удалить из категории

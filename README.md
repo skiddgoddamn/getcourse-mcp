@@ -87,6 +87,7 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_find_orders` | List a user's orders (dealId + status). |
 | `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). ⚠️ single-step: `dryRun:false` creates the order immediately. |
 | `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`). |
+| `gc_refund_order` | File a money refund for an order via the GetCourse payment module (real money back to the buyer's card). Only for payments processed by the platform; VAT must mirror the original receipt. `dryRun`. |
 | `gc_user_summary` | One call: profile + groups + orders for a user. |
 | `gc_list_mailing_categories` | List mailing categories (tag-like segmentation) — id + name. |
 | `gc_add_to_mailing_category` | Add a user to a mailing category. |

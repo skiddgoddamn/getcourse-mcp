@@ -14,6 +14,7 @@ import {
   findUserOrders,
   createOrder,
   setOrderStatus,
+  refundOrder,
   listMailingCategories,
   setMailingCategory,
   type GcGroup,
@@ -252,6 +253,27 @@ export async function handleGcSetOrderStatus(p: z.infer<typeof gcSetOrderStatusS
   return withSession(async (s) => {
     const r = await setOrderStatus(s, p.dealId, p.status, { cancelReasonId: p.cancelReasonId });
     return `${r.ok ? "OK" : "FAIL"} ${r.message}${r.status ? ` Текущий статус: ${r.status}` : ""}`;
+  });
+}
+
+// gc_refund_order (write) — real money refund via the Геткурс payment module.
+// Only payments processed by the platform are refundable this way; VAT must
+// mirror the original receipt (чек «нет налога» → vat=none).
+export const gcRefundOrderSchema = z.object({
+  dealId: z.string().describe("ID сделки (из gc_find_orders / gc_user_summary)."),
+  paymentId: z.string().optional().describe("ID платежа, если на сделке их несколько (список вернётся в ошибке)."),
+  amount: z.number().optional().describe("Сумма частичного возврата (только при одной позиции; по умолчанию полная стоимость)."),
+  vat: z
+    .enum(["none", "0", "5", "7", "10", "20", "22"])
+    .optional()
+    .describe("Ставка НДС позиций возврата — как в чеке прихода (по умолчанию none = «без НДС»)."),
+  dryRun: z.boolean().optional().describe("Заполнить форму возврата и показать сводку БЕЗ отправки (по умолчанию false)."),
+});
+export async function handleGcRefundOrder(p: z.infer<typeof gcRefundOrderSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const r = await refundOrder(s, p.dealId, { paymentId: p.paymentId, amount: p.amount, vat: p.vat, dryRun: p.dryRun });
+    const pays = r.payments?.length ? `\nПлатежи сделки:\n${r.payments.map((x) => `• ${x.paymentId} — ${x.text}`).join("\n")}` : "";
+    return `${r.ok ? "OK" : "FAIL"} [${r.step}] ${r.message}${pays}`;
   });
 }
 

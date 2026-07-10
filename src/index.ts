@@ -16,6 +16,7 @@ import {
   gcFindOrdersSchema, handleGcFindOrders,
   gcCreateOrderSchema, handleGcCreateOrder,
   gcSetOrderStatusSchema, handleGcSetOrderStatus,
+  gcRefundOrderSchema, handleGcRefundOrder,
   gcUserSummarySchema, handleGcUserSummary,
   gcListMailingCategoriesSchema, handleGcListMailingCategories,
   gcAddToMailingCategorySchema, handleGcAddToMailingCategory,
@@ -25,7 +26,7 @@ import {
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "getcourse-mcp", version: "0.2.0" });
+  const server = new McpServer({ name: "getcourse-mcp", version: "0.3.0" });
 
   server.tool(
     "gc_status",
@@ -126,6 +127,13 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
+    "gc_refund_order",
+    "Оформить возврат денег по заказу через платёжный модуль Геткурса (реальный возврат на карту покупателя). Только для платежей через платформу Геткурс. НДС — как в чеке прихода (none = «без НДС»). dryRun — сводка без отправки.",
+    gcRefundOrderSchema.shape,
+    async (p) => text(await handleGcRefundOrder(p)),
+  );
+
+  server.tool(
     "gc_user_summary",
     "Сводка по пользователю за один вызов: профиль + группы + заказы.",
     gcUserSummarySchema.shape,
@@ -160,7 +168,7 @@ async function main() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[getcourse-mcp] stdio server started (18 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
+  console.error("[getcourse-mcp] stdio server started (19 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
 }
 
 main().catch((e) => {
