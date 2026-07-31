@@ -1,6 +1,6 @@
 {
   "name": "getcourse-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "MCP server that automates a GetCourse account (grant lesson/training access, manage users & groups) through a logged-in browser over CDP.",
   "type": "module",
   "main": "dist/index.js",

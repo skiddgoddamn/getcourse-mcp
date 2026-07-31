@@ -15,6 +15,7 @@ import {
   gcFindOffersSchema, handleGcFindOffers,
   gcFindOrdersSchema, handleGcFindOrders,
   gcCreateOrderSchema, handleGcCreateOrder,
+  gcPayOrderSchema, handleGcPayOrder,
   gcSetOrderStatusSchema, handleGcSetOrderStatus,
   gcRefundOrderSchema, handleGcRefundOrder,
   gcUserSummarySchema, handleGcUserSummary,
@@ -26,7 +27,7 @@ import {
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "getcourse-mcp", version: "0.3.0" });
+  const server = new McpServer({ name: "getcourse-mcp", version: "0.4.0" });
 
   server.tool(
     "gc_status",
@@ -114,9 +115,18 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     "gc_create_order",
-    "Создать заказ по офферам = выдать доступ покупкой (для тренингов «только купившие» группы доступ НЕ дают). 0₽ комп-оффер = доступ без денег. ⚠️ dryRun=false создаёт заказ СРАЗУ (без предпросмотра).",
+    "Создать заказ по офферам = выдать доступ покупкой (для тренингов «только купившие» группы доступ НЕ дают). 0₽ комп-оффер = доступ без денег. " +
+      "Сделка создаётся в статусе «Новый» — доступ НЕ выдан, пока сделка не оплачена: передай complete=true, чтобы сразу провести 0₽-оплату и выдать доступ (или заверши потом gc_pay_order). " +
+      "⚠️ dryRun=false создаёт заказ СРАЗУ (без предпросмотра).",
     gcCreateOrderSchema.shape,
     async (p) => text(await handleGcCreateOrder(p)),
+  );
+
+  server.tool(
+    "gc_pay_order",
+    "Провести оплату по сделке = пометить оплаченной (сделка → «Завершён»), чем ВЫДАЁТСЯ доступ по офферу. В дропдауне статусов «Оплачен» нет — завершение только так. amount=0 по умолчанию (комп-доступ). ⚠️ не ставь 0 на реальной платной сделке. dryRun — предпросмотр.",
+    gcPayOrderSchema.shape,
+    async (p) => text(await handleGcPayOrder(p)),
   );
 
   server.tool(
@@ -168,7 +178,7 @@ async function main() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[getcourse-mcp] stdio server started (19 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
+  console.error("[getcourse-mcp] stdio server started (20 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
 }
 
 main().catch((e) => {

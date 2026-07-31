@@ -685,6 +685,89 @@ export async function createOrder(
   };
 }
 
+export interface PayDealResult {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Complete a deal by registering a payment on it (deal → «Завершён»). This is what
+ * actually GRANTS access for offers whose delivery is purchase-based ("только
+ * купившие"): createOrder leaves the deal in «Новый» and no access is delivered
+ * until a payment is RECEIVED. There is no «Оплачен» item in the status dropdown —
+ * completion is payment-driven. Drives the card «Добавить платеж» form:
+ * type=Счёт на оплату (invoice), amount (0 by default = comp/free), status=Получен
+ * (accepted), buyer/admin notifications OFF.
+ * ⚠️ amount defaults to "0" — do NOT call on a real paid deal you expect money for.
+ */
+export async function payDeal(
+  s: GcSession,
+  dealId: string,
+  opts: { amount?: string; dryRun?: boolean } = {},
+): Promise<PayDealResult> {
+  const { amount = "0", dryRun = false } = opts;
+  if (dryRun) {
+    return {
+      ok: true,
+      message: `dryRun: платёж НЕ проведён. Сделка ${dealId}, ${amount}₽, статус «Получен». ` +
+        `Реальный вызов помечает сделку оплаченной сразу — предпросмотра у операции нет.`,
+    };
+  }
+  await goto(s, `/sales/control/deal/update/id/${dealId}`);
+  await s.page.waitForTimeout(1200);
+  const opened = await s.page.evaluate(() => {
+    const el = Array.from(document.querySelectorAll("a")).find(
+      (a) => /Добавить платеж/i.test((a as HTMLElement).innerText || ""),
+    ) as HTMLElement | undefined;
+    if (!el) return false;
+    el.click();
+    return true;
+  });
+  if (!opened) return { ok: false, message: `На сделке ${dealId} нет «Добавить платеж» (уже оплачена или нет прав?).` };
+  await s.page.waitForTimeout(1500);
+  const filled = await s.page.evaluate((amt: string) => {
+    const setSel = (n: string, v: string) => {
+      const e = document.querySelector(`select[name="${n}"]`) as HTMLSelectElement | null;
+      if (e) { e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); }
+    };
+    const setInp = (n: string, v: string) => {
+      const e = document.querySelector(`input[name="${n}"]`) as HTMLInputElement | null;
+      if (e) { e.value = v; e.dispatchEvent(new Event("input", { bubbles: true })); }
+    };
+    const uncheck = (n: string) => {
+      const e = document.querySelector(`input[name="${n}"]`) as HTMLInputElement | null;
+      if (e && e.checked) e.click();
+    };
+    if (!document.querySelector('select[name="Payment[type]"]')) return false;
+    setSel("Payment[type]", "invoice");
+    setInp("Payment[amount]", amt);
+    setSel("Payment[currency]", "RUB");
+    setSel("Payment[status]", "accepted"); // «Получен» — это и делает сделку оплаченной
+    uncheck("PaymentParamsObject[notify_user]");
+    uncheck("PaymentParamsObject[notify_admin]");
+    return true;
+  }, amount);
+  if (!filled) return { ok: false, message: `Форма платежа на сделке ${dealId} не найдена.` };
+  await s.page.evaluate(() => {
+    const btns = Array.from(
+      document.querySelectorAll('button[name="save"],input[name="save"],button[type="submit"]'),
+    ).filter((b) => (b as HTMLElement).offsetParent !== null);
+    const b = (btns.find((x) => /Сохранить/i.test((x as HTMLElement).innerText || (x as HTMLInputElement).value || "")) ||
+      btns[btns.length - 1]) as HTMLElement | undefined;
+    b?.click();
+  });
+  await s.page.waitForTimeout(3500);
+  const paid = await s.page.evaluate(() =>
+    /Получен|Завершен|Оплачен/i.test((document.body.innerText || "").replace(/\s+/g, " ")),
+  );
+  return {
+    ok: paid,
+    message: paid
+      ? `Платёж ${amount}₽ проведён — сделка ${dealId} оплачена (доступ по офферу выдан).`
+      : `Платёж отправлен, но подтверждения оплаты на сделке ${dealId} не видно — проверьте вручную.`,
+  };
+}
+
 export interface SetOrderStatusResult {
   ok: boolean;
   message: string;

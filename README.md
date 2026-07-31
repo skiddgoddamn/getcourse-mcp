@@ -37,6 +37,18 @@ gc_check_membership     # which of these groups is student X in?
 gc_add_user_to_groups   # add student Y to the same groups
 ```
 
+### Franchise / "buyers-only" offers → access via a *completed* purchase
+
+Some offers (franchises, "только купившие" trainings) deliver access **only from a completed purchase** — group membership grants nothing there. Grant it in one call:
+
+```bash
+gc_find_offers   {"query":"Трафик Формула"}                            # → offer id, e.g. 6510356
+gc_create_order  {"email":"user@x.ru","offerIds":["6510356"],"complete":true}
+#   creates the order AND completes a 0₽ payment → access is live immediately
+```
+
+⚠️ **`gc_create_order` alone leaves the deal in «Новый» and delivers NO access** — the deal must be *paid*. There is no «Оплачен» item in the status dropdown; **completion is payment-driven**. `complete:true` (or a later `gc_pay_order {"dealId":"…"}`) registers a 0₽ *received* payment → deal → «Завершён» → access granted. Purchase-based access does **not** appear in the user's groups — that's by design, not a bug. Use `complete` only for 0₽/comp offers.
+
 ## Requirements
 
 1. A Chromium-based browser (Chrome / Yandex) launched with a debug port on a **separate profile**, logged into your account:
@@ -85,7 +97,8 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_update_user` | Edit card fields (first/last name, phone, city, comment). Email is out of scope. `dryRun`. |
 | `gc_find_offers` | Search sales offers by name → id + price + actuality. |
 | `gc_find_orders` | List a user's orders (dealId + status). |
-| `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). ⚠️ single-step: `dryRun:false` creates the order immediately. |
+| `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). Deal is created in «Новый» = **no access until paid**; pass `complete:true` to auto-run a 0₽ payment and deliver access at once. ⚠️ single-step: `dryRun:false` creates the order immediately. |
+| `gc_pay_order` | Complete a deal by registering a received payment (`amount` "0" by default) → deal «Завершён» → access delivered. The way to "mark paid" (no «Оплачен» in the status dropdown). ⚠️ don't use `0` on a real paid deal. `dryRun`. |
 | `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`). |
 | `gc_refund_order` | File a money refund for an order via the GetCourse payment module (real money back to the buyer's card). Only for payments processed by the platform; VAT must mirror the original receipt. `dryRun`. |
 | `gc_user_summary` | One call: profile + groups + orders for a user. |

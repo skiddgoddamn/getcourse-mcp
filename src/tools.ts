@@ -13,6 +13,7 @@ import {
   findOffers,
   findUserOrders,
   createOrder,
+  payDeal,
   setOrderStatus,
   refundOrder,
   listMailingCategories,
@@ -227,6 +228,13 @@ export const gcCreateOrderSchema = z.object({
   email: z.string().describe("Email пользователя (существующий)."),
   offerIds: z.array(z.string()).min(1).describe("ID офферов (см. gc_find_offers). 0₽ комп-оффер = доступ без денег."),
   tryPayFromDeposit: z.boolean().optional().describe("Попытаться оплатить с депозита (по умолчанию false)."),
+  complete: z
+    .boolean()
+    .optional()
+    .describe(
+      "Сразу провести 0₽-оплату созданной сделки → доступ выдаётся немедленно. НУЖНО для комп-офферов «только купившие», где сделка «Новый» доступ НЕ даёт. " +
+        "По умолчанию false: сделка остаётся «Новый», доступ не выдан — заверши потом gc_pay_order. ⚠️ используй complete только для 0₽/бесплатных офферов.",
+    ),
   dryRun: z
     .boolean()
     .optional()
@@ -237,7 +245,30 @@ export async function handleGcCreateOrder(p: z.infer<typeof gcCreateOrderSchema>
     const id = await resolveUserId(s, p.email);
     const r = await createOrder(s, id, p.offerIds, { dryRun: p.dryRun, tryPayFromDeposit: p.tryPayFromDeposit });
     const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
-    return `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
+    const base = `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
+    if (p.dryRun || !r.ok || !p.complete) return base;
+    // complete=true → provести оплату свежесозданной сделки, чтобы доступ стал живым.
+    // ponytail: «свежая сделка = самая верхняя в карточке» — верно для одиночного
+    // админ-потока; параллельное создание сделки может дать гонку. Операция создания
+    // dealId не возвращает, а findUserOrders отдаёт новейшую сделку первой.
+    const orders = await findUserOrders(s, id);
+    const dealId = orders[0]?.dealId;
+    if (!dealId) return `${base}\n⚠️ complete: не удалось найти созданную сделку для оплаты — заверши вручную gc_pay_order.`;
+    const pr = await payDeal(s, dealId, { dryRun: false });
+    return `${base}\n${pr.ok ? "OK" : "FAIL"} ${pr.message}`;
+  });
+}
+
+// gc_pay_order (write) — complete a deal by registering a (0₽ by default) received payment
+export const gcPayOrderSchema = z.object({
+  dealId: z.string().describe("ID сделки (из gc_find_orders / gc_user_summary / URL /sales/control/deal/update/id/<id>)."),
+  amount: z.string().optional().describe('Сумма платежа, по умолчанию "0" (комп/бесплатный доступ). ⚠️ НЕ ставь 0 на реальной платной сделке.'),
+  dryRun: z.boolean().optional().describe("Только эхо, без проведения платежа."),
+});
+export async function handleGcPayOrder(p: z.infer<typeof gcPayOrderSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const r = await payDeal(s, p.dealId, { amount: p.amount, dryRun: p.dryRun });
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}`;
   });
 }
 
