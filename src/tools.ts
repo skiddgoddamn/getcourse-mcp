@@ -41,9 +41,13 @@ export const gcStatusSchema = z.object({});
 export async function handleGcStatus(): Promise<string> {
   return withSession(async (s) => {
     const st = await status(s);
-    return st.loggedIn
-      ? `✅ Залогинен. ${st.account ?? ""} (${st.url})`
-      : `❌ Не залогинен (${st.url}). Войдите в аккаунт в браузере с debug-портом.`;
+    if (st.loggedIn) return `✅ Залогинен, права админки есть. ${st.account ?? ""} (${st.url})`;
+    if (st.wrongRole)
+      return (
+        `❌ Сессия есть, но без прав админки${st.account ? ` — ${st.account}` : ""}. ` +
+        `Похоже, в браузере вошли под учеником/сотрудником. Перелогиньтесь администратором (${st.url}).`
+      );
+    return `❌ Не залогинен (${st.url}). Войдите в аккаунт в браузере с debug-портом.`;
   });
 }
 

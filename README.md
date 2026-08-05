@@ -87,7 +87,7 @@ Register it with your MCP client (see `.mcp.json.example`):
 
 | Tool | Purpose |
 |------|---------|
-| `gc_status` | Check that an admin is logged in in the CDP browser. |
+| `gc_status` | Check the CDP browser session **actually has admin rights** (not merely that a session exists). Reports the "logged in as a student" case separately. |
 | `gc_find_user` | Find a user by email → id, name, type, status. |
 | `gc_list_training_groups` | Access groups of a training (id + name). |
 | `gc_list_user_groups` | Groups a user belongs to (id + name). |
@@ -133,6 +133,7 @@ npx tsx src/run.ts gc_check_membership \
 - A direct mass action exists (`POST /pl/logic/operation/prepare?operationType=user_addtogroup`), but in the current UI it is a selection-builder wizard — a candidate to wire up as an alternative path.
 - **Membership** is checked through the user list filtered by a `user_ingrouprule` rule (`params.value.selected_id`), which reflects membership immediately (the training student list mirrors access asynchronously and is not reliable for verification).
 - **Writes never trust their own exit code.** A single-step operation can throw *after* the mutation landed, so `gc_create_order` snapshots the user's deals first and reports the deal that actually appeared — which also removes the "newest deal must be ours" guess.
+- **The session check tests rights, not the mere presence of a session.** `gc_status` probes the admin user list (`/pl/user/user`) — the endpoint `gc_find_user`/`resolveUserId` depend on. It used to check `/teach/control`, which renders for students too: a student session reported "✅ logged in" and every later read silently ran as that student. The "denied" signal is anchored on GetCourse's own error-page wording so stray list content can't lock an admin out.
 - **`__name` shim.** `page.evaluate` callbacks are serialized and run inside the page. esbuild (what `tsx` runs on) rewrites named inner functions into `__name(...)` calls, which do not exist there — hence `ReferenceError: __name is not defined` under `tsx src/*.ts` while the compiled `dist/*.js` works. Every navigation installs a no-op shim (`ensureEvalShim`), so both entry points behave the same. If you drive `page.goto` yourself, call `ensureEvalShim(page)` after it.
 
 ## Contributing

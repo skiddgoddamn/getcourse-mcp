@@ -76,24 +76,48 @@ async function goto(s: GcSession, path: string): Promise<void> {
 // ── Status ──────────────────────────────────────────────────────────────────
 
 export interface GcStatus {
+  /** Session can actually drive the admin panel (not merely "a session exists"). */
   loggedIn: boolean;
+  /** `id<N> | <роль>` as GetCourse prints it, when the page exposes it. */
   account: string | null;
+  /** Role parsed from the page footer, e.g. "администратор" / "ученик". */
+  role: string | null;
+  /** Logged in, but the account lacks admin rights (e.g. a student session). */
+  wrongRole: boolean;
   url: string;
 }
 
-/** Verify the browser session is logged into the admin panel. */
+/**
+ * Verify the browser session can actually operate the admin panel.
+ *
+ * ⚠️ Probes the admin USER LIST, not `/teach/control`. The training list renders
+ * for students too, so checking it reported "✅ logged in" for a student session
+ * — and every later read then silently ran as that student. `/pl/user/user` is
+ * the same endpoint findUser/resolveUserId depend on, so a green status here
+ * predicts that the rest of the tools will work.
+ */
 export async function status(s: GcSession): Promise<GcStatus> {
-  await goto(s, "/teach/control");
-  await s.page.waitForTimeout(800);
+  const q = new URLSearchParams({ "uc[email]": "__gc_status_probe__" });
+  await goto(s, `/pl/user/user?${q.toString()}`);
+  await s.page.waitForTimeout(600);
   const res = await s.page.evaluate(() => {
-    const hasLoginForm = !!document.querySelector('input[type="password"]');
-    const isTrainingList = /Список тренингов|Тренинги:/i.test(document.body.innerText);
-    const footer = (document.body.innerText.match(/id(\d+)\s*\|\s*администратор/i) || [])[0] || null;
-    return { hasLoginForm, isTrainingList, footer };
+    const t = (document.body.innerText || "").replace(/\s+/g, " ");
+    // GetCourse prints "<дата> | id<N> | <роль> | <url>" in the page footer.
+    const who = t.match(/id(\d+)\s*\|\s*([A-Za-zА-Яа-яЁё-]+)/);
+    return {
+      hasLoginForm: !!document.querySelector('input[type="password"]'),
+      // Anchored on GetCourse's own error-page wording — a loose "нет доступа"
+      // would false-positive on list content and lock an admin out of the tools.
+      denied: /Возникла ошибка #(403|404)|отсутствуют права на это действие|У вас нет доступа/i.test(t),
+      userId: who ? who[1] : null,
+      role: who ? who[2] : null,
+    };
   });
   return {
-    loggedIn: !res.hasLoginForm && res.isTrainingList,
-    account: res.footer,
+    loggedIn: !res.hasLoginForm && !res.denied,
+    account: res.userId ? `id${res.userId}${res.role ? ` | ${res.role}` : ""}` : null,
+    role: res.role,
+    wrongRole: !res.hasLoginForm && res.denied,
     url: s.page.url(),
   };
 }
