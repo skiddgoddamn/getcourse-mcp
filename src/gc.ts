@@ -47,9 +47,29 @@ export async function connect(cfg: GcConfig = loadConfig()): Promise<GcSession> 
   return { browser, page, cfg, close };
 }
 
+/**
+ * esbuild (what `tsx` runs on) compiles named inner functions with a `__name(...)`
+ * helper call. Callbacks passed to `page.evaluate` are serialized and executed in
+ * the PAGE, where that helper does not exist → `ReferenceError: __name is not
+ * defined`, and the tool dies mid-flow (possibly after a write already landed).
+ * A no-op shim on the page makes evaluate callbacks transpiler-agnostic, so the
+ * same source works under `tsx src/*.ts` and compiled `dist/*.js` alike.
+ *
+ * Passed as a STRING on purpose — a function literal here would itself be
+ * transpiled and reintroduce the very reference it is meant to define. Trailing
+ * `, 0` keeps it a plain expression with a serializable result.
+ */
+const EVAL_SHIM = "globalThis.__name = globalThis.__name || (function (f) { return f; }), 0";
+
+/** Install the `__name` shim on the page's current document. Idempotent. */
+export async function ensureEvalShim(page: Page): Promise<void> {
+  await page.evaluate(EVAL_SHIM).catch(() => {});
+}
+
 async function goto(s: GcSession, path: string): Promise<void> {
   const url = path.startsWith("http") ? path : `${s.cfg.baseUrl}${path}`;
   await s.page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  await ensureEvalShim(s.page);
   await s.page.waitForTimeout(400);
 }
 
@@ -715,6 +735,18 @@ export async function payDeal(
   }
   await goto(s, `/sales/control/deal/update/id/${dealId}`);
   await s.page.waitForTimeout(1200);
+  // A 0₽ order has nothing to pay: GetCourse flips it «Новый → Завершен» on
+  // creation. Then «Добавить платеж» is gone and the old code reported FAIL for
+  // a deal that is, in fact, delivered — check the status before trying to pay.
+  const done = await s.page.evaluate(() => {
+    const t = (document.body.innerText || "").replace(/\s+/g, " ");
+    return /Статус:\s*(Завершен|Оплачен)/i.test(t) || /Нельзя изменить состав завершенного заказа/i.test(t);
+  });
+  if (done)
+    return {
+      ok: true,
+      message: `Сделка ${dealId} уже завершена — платёж не требуется (0₽-заказы Геткурс завершает сам). Доступ по офферу выдан.`,
+    };
   const opened = await s.page.evaluate(() => {
     const el = Array.from(document.querySelectorAll("a")).find(
       (a) => /Добавить платеж/i.test((a as HTMLElement).innerText || ""),

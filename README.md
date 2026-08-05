@@ -47,7 +47,9 @@ gc_create_order  {"email":"user@x.ru","offerIds":["6510356"],"complete":true}
 #   creates the order AND completes a 0₽ payment → access is live immediately
 ```
 
-⚠️ **`gc_create_order` alone leaves the deal in «Новый» and delivers NO access** — the deal must be *paid*. There is no «Оплачен» item in the status dropdown; **completion is payment-driven**. `complete:true` (or a later `gc_pay_order {"dealId":"…"}`) registers a 0₽ *received* payment → deal → «Завершён» → access granted. Purchase-based access does **not** appear in the user's groups — that's by design, not a bug. Use `complete` only for 0₽/comp offers.
+⚠️ **A priced deal left in «Новый» delivers NO access** — it must be *paid*. There is no «Оплачен» item in the status dropdown; **completion is payment-driven**. `complete:true` (or a later `gc_pay_order {"dealId":"…"}`) registers a 0₽ *received* payment → deal → «Завершён» → access granted. Use `complete` only for 0₽/comp offers.
+
+A **0₽ order has nothing to pay**, so GetCourse flips it «Новый → Завершен» on creation by itself; `complete:true` then detects the finished deal and touches nothing. Purchase-based access does **not** appear in the user's groups — that's by design, not a bug. Verify it on `/teach/control/stat/user/id/<userId>` (Training / Lesson access), which reflects the grant immediately.
 
 ## Requirements
 
@@ -97,7 +99,7 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_update_user` | Edit card fields (first/last name, phone, city, comment). Email is out of scope. `dryRun`. |
 | `gc_find_offers` | Search sales offers by name → id + price + actuality. |
 | `gc_find_orders` | List a user's orders (dealId + status). |
-| `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). Deal is created in «Новый» = **no access until paid**; pass `complete:true` to auto-run a 0₽ payment and deliver access at once. ⚠️ single-step: `dryRun:false` creates the order immediately. |
+| `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). Reports the created deal's id and status; a priced deal in «Новый» means **no access until paid**, `complete:true` drives it to «Завершён». ⚠️ single-step: `dryRun:false` creates the order immediately. |
 | `gc_pay_order` | Complete a deal by registering a received payment (`amount` "0" by default) → deal «Завершён» → access delivered. The way to "mark paid" (no «Оплачен» in the status dropdown). ⚠️ don't use `0` on a real paid deal. `dryRun`. |
 | `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`). |
 | `gc_refund_order` | File a money refund for an order via the GetCourse payment module (real money back to the buyer's card). Only for payments processed by the platform; VAT must mirror the original receipt. `dryRun`. |
@@ -130,6 +132,8 @@ npx tsx src/run.ts gc_check_membership \
 - **Granting access** (`gc_add_user_to_groups`) uses the bulk *Add users* form (`/pl/user/user/import?type=text`): email + selected groups. For an **existing** user the "overwrite on match" flag is required (`overwriteExisting`, default `true`), otherwise the groups are not applied — the import carries only the email, so no profile data is touched.
 - A direct mass action exists (`POST /pl/logic/operation/prepare?operationType=user_addtogroup`), but in the current UI it is a selection-builder wizard — a candidate to wire up as an alternative path.
 - **Membership** is checked through the user list filtered by a `user_ingrouprule` rule (`params.value.selected_id`), which reflects membership immediately (the training student list mirrors access asynchronously and is not reliable for verification).
+- **Writes never trust their own exit code.** A single-step operation can throw *after* the mutation landed, so `gc_create_order` snapshots the user's deals first and reports the deal that actually appeared — which also removes the "newest deal must be ours" guess.
+- **`__name` shim.** `page.evaluate` callbacks are serialized and run inside the page. esbuild (what `tsx` runs on) rewrites named inner functions into `__name(...)` calls, which do not exist there — hence `ReferenceError: __name is not defined` under `tsx src/*.ts` while the compiled `dist/*.js` works. Every navigation installs a no-op shim (`ensureEvalShim`), so both entry points behave the same. If you drive `page.goto` yourself, call `ensureEvalShim(page)` after it.
 
 ## Contributing
 

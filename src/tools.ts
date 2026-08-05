@@ -243,19 +243,38 @@ export const gcCreateOrderSchema = z.object({
 export async function handleGcCreateOrder(p: z.infer<typeof gcCreateOrderSchema>): Promise<string> {
   return withSession(async (s) => {
     const id = await resolveUserId(s, p.email);
-    const r = await createOrder(s, id, p.offerIds, { dryRun: p.dryRun, tryPayFromDeposit: p.tryPayFromDeposit });
-    const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
-    const base = `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
-    if (p.dryRun || !r.ok || !p.complete) return base;
-    // complete=true → provести оплату свежесозданной сделки, чтобы доступ стал живым.
-    // ponytail: «свежая сделка = самая верхняя в карточке» — верно для одиночного
-    // админ-потока; параллельное создание сделки может дать гонку. Операция создания
-    // dealId не возвращает, а findUserOrders отдаёт новейшую сделку первой.
-    const orders = await findUserOrders(s, id);
-    const dealId = orders[0]?.dealId;
-    if (!dealId) return `${base}\n⚠️ complete: не удалось найти созданную сделку для оплаты — заверши вручную gc_pay_order.`;
-    const pr = await payDeal(s, dealId, { dryRun: false });
-    return `${base}\n${pr.ok ? "OK" : "FAIL"} ${pr.message}`;
+    if (p.dryRun) {
+      const r = await createOrder(s, id, p.offerIds, { dryRun: true, tryPayFromDeposit: p.tryPayFromDeposit });
+      return `${r.ok ? "OK" : "FAIL"} ${r.message}`;
+    }
+    // Снимок сделок ДО записи. Операция одношаговая и может упасть уже ПОСЛЕ того,
+    // как заказ создан, — брошенная ошибка не доказывает, что ничего не произошло;
+    // источник истины только состояние аккаунта. Диф со снимком заодно опознаёт
+    // именно НАШУ сделку вместо допущения «самая верхняя — наша».
+    const before = new Set((await findUserOrders(s, id)).map((o) => o.dealId));
+    let base: string;
+    try {
+      const r = await createOrder(s, id, p.offerIds, { tryPayFromDeposit: p.tryPayFromDeposit });
+      const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
+      base = `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
+    } catch (e) {
+      base = `FAIL создание заказа упало: ${(e as Error).message}`;
+    }
+    const fresh = (await findUserOrders(s, id)).find((o) => !before.has(o.dealId));
+    if (!fresh) return `${base}\nНовых сделок у пользователя не появилось — заказ не создан.`;
+    base += `\nСоздана сделка ${fresh.dealId}${fresh.status ? ` — статус «${fresh.status}»` : ""}.`;
+    if (!p.complete) return base;
+    // complete=true → provести оплату созданной сделки, чтобы доступ стал живым.
+    // Для 0₽-заказа payDeal увидит, что Геткурс уже завершил сделку сам, и ничего не тронет.
+    try {
+      const pr = await payDeal(s, fresh.dealId, { dryRun: false });
+      return `${base}\n${pr.ok ? "OK" : "FAIL"} ${pr.message}`;
+    } catch (e) {
+      return (
+        `${base}\n⚠️ Заказ создан, но шаг завершения упал: ${(e as Error).message}\n` +
+        `Проверь статус сделки и при необходимости добей: gc_pay_order {"dealId":"${fresh.dealId}"}.`
+      );
+    }
   });
 }
 
