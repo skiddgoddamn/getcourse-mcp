@@ -103,6 +103,7 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_pay_order` | Complete a deal by registering a received payment (`amount` "0" by default) → deal «Завершён» → access delivered. The way to "mark paid" (no «Оплачен» in the status dropdown). ⚠️ don't use `0` on a real paid deal. `dryRun`. |
 | `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`). |
 | `gc_refund_order` | File a money refund for an order via the GetCourse payment module (real money back to the buyer's card). Only for payments processed by the platform; VAT must mirror the original receipt. `dryRun`. |
+| `gc_unlock_modules` | Open modules for a stuck (but paid) student: advance the module-delivery process past its «завершил модуль N» wait (clicks «перейти далее»). `all:true` opens the whole course; default opens the next module. Needs manager/supervisor rights on the process. `dryRun`. |
 | `gc_user_summary` | One call: profile + groups + orders for a user. |
 | `gc_list_mailing_categories` | List mailing categories (tag-like segmentation) — id + name. |
 | `gc_add_to_mailing_category` | Add a user to a mailing category. |
