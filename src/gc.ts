@@ -1157,3 +1157,130 @@ export async function setMailingCategory(
   });
   return { ok: res.ok, message: res.ok ? "Готово." : "Ответ без подтверждения «Успешно».", rows: res.rows };
 }
+
+// ── Unlock modules: advance a drip process past "завершил модуль N" ────────────
+// Franchise/course trainings deliver modules through a business process ("Выдача
+// доступов к модулям") that parks on a wait condition «Ждем: завершил модуль N»
+// and only grants the next module once the student completes the current one. A
+// paid student who can't/won't finish the intro is stuck with nothing open. The
+// card's process widget exposes a «перейти далее» link that manually advances the
+// parked task to the next step (granting that module). This drives that link:
+// once (open the next module) or in a loop (open the whole course). Requires the
+// admin to be a manager/supervisor of the process, else «перейти далее» is absent.
+
+export interface UnlockModulesResult {
+  ok: boolean;
+  message: string;
+  steps: string[];
+  advanced: number;
+  finalWaits: string[];
+}
+
+// NB: no named inner fns inside page.evaluate — esbuild/tsx wraps them with a
+// __name helper that doesn't exist in the browser context. Everything is inlined.
+
+/** Read the process waits + whether a module-completion "перейти далее" is present. */
+function readModuleState(s: GcSession): Promise<{ waits: string[]; moduleWait: string; hasNext: boolean }> {
+  return s.page.evaluate(() => {
+    const waits = Array.from(document.body.innerText.matchAll(/Ждем:\s*([^\n(]+?)\s*\(idS:\s*(\d+)\)/gi)).map(
+      (m) => `${m[1].trim()} (idS ${m[2]})`,
+    );
+    const moduleWait = waits.find((w) => /завершил модуль/i.test(w)) || "";
+    // a «перейти далее» whose surrounding task block mentions "завершил модуль"
+    const links = Array.from(document.querySelectorAll("a")).filter(
+      (a) => ((a as HTMLElement).innerText || "").replace(/\s+/g, " ").trim() === "перейти далее",
+    );
+    let hasNext = false;
+    for (const a of links) {
+      let el: HTMLElement | null = a as HTMLElement;
+      for (let i = 0; i < 6 && el; i++) {
+        el = el.parentElement;
+        if (el && /завершил модуль/i.test(el.innerText || "")) { hasNext = true; break; }
+      }
+      if (hasNext) break;
+    }
+    // fallback: a lone «перейти далее» while a module wait exists on the page
+    if (!hasNext && links.length && /завершил модуль/i.test(document.body.innerText)) hasNext = true;
+    return { waits, moduleWait, hasNext };
+  });
+}
+
+/** Click the module-completion «перейти далее» (block-scoped, lone-link fallback). */
+function clickAdvance(s: GcSession): Promise<boolean> {
+  return s.page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll("a")).filter(
+      (a) => ((a as HTMLElement).innerText || "").replace(/\s+/g, " ").trim() === "перейти далее",
+    );
+    let target: HTMLElement | null = null;
+    for (const a of links) {
+      let el: HTMLElement | null = a as HTMLElement;
+      for (let i = 0; i < 6 && el; i++) {
+        el = el.parentElement;
+        if (el && /завершил модуль/i.test(el.innerText || "")) { target = a as HTMLElement; break; }
+      }
+      if (target) break;
+    }
+    if (!target && links.length && /завершил модуль/i.test(document.body.innerText)) target = links[0] as HTMLElement;
+    if (target) { target.click(); return true; }
+    return false;
+  });
+}
+
+/**
+ * Advance the module-delivery process past «Ждем: завершил модуль N» for a user.
+ * all=false (default): one click = open the next module. all=true: loop until no
+ * module wait remains = open the whole course. dryRun: report state, don't click.
+ * The confirm dialog is auto-accepted by connect()'s dialog handler.
+ */
+export async function unlockModules(
+  s: GcSession,
+  userId: string,
+  opts: { all?: boolean; dryRun?: boolean } = {},
+): Promise<UnlockModulesResult> {
+  const { all = false, dryRun = false } = opts;
+  const card = `/user/control/user/update/id/${userId}`;
+
+  await goto(s, card);
+  await s.page.waitForTimeout(1200);
+  let st = await readModuleState(s);
+
+  if (!st.moduleWait) {
+    return { ok: false, message: `Процесс не ждёт завершения модуля (нет «Ждем: завершил модуль …»). Ожидания: ${st.waits.join(" | ") || "—"}`, steps: [], advanced: 0, finalWaits: st.waits };
+  }
+  if (!st.hasNext) {
+    return { ok: false, message: `Есть ожидание «${st.moduleWait}», но кнопки «перейти далее» нет — нужны права менеджера/супервайзера процесса.`, steps: [], advanced: 0, finalWaits: st.waits };
+  }
+  if (dryRun) {
+    const plan = all ? "прогнал бы «перейти далее» до конца всех модулей." : "нажал бы «перейти далее» один раз (следующий модуль).";
+    return { ok: true, message: `dryRun: НЕ нажато. Сейчас «${st.moduleWait}»; ${plan}`, steps: [], advanced: 0, finalWaits: st.waits };
+  }
+
+  const steps: string[] = [];
+  let advanced = 0;
+  let last = "";
+  const MAX = all ? 30 : 1; // 30 = safety cap against a stuck loop
+  for (let i = 0; i < MAX; i++) {
+    st = await readModuleState(s);
+    if (!st.moduleWait || !st.hasNext) break;
+    if (st.moduleWait === last) {
+      steps.push(`⚠️ условие не изменилось после нажатия («${st.moduleWait}») — остановка`);
+      break;
+    }
+    last = st.moduleWait;
+    if (!(await clickAdvance(s))) break;
+    advanced++;
+    steps.push(`✓ ${st.moduleWait} → далее`);
+    await s.page.waitForTimeout(3000);
+    await goto(s, card);
+    await s.page.waitForTimeout(1200);
+  }
+
+  st = await readModuleState(s);
+  return {
+    ok: advanced > 0,
+    message: advanced > 0 ? `Готово: сделано ${advanced} шаг(ов) «перейти далее».` : "Ничего не сдвинулось.",
+    steps,
+    advanced,
+    finalWaits: st.waits,
+  };
+}

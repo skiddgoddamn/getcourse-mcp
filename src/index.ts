@@ -18,6 +18,7 @@ import {
   gcPayOrderSchema, handleGcPayOrder,
   gcSetOrderStatusSchema, handleGcSetOrderStatus,
   gcRefundOrderSchema, handleGcRefundOrder,
+  gcUnlockModulesSchema, handleGcUnlockModules,
   gcUserSummarySchema, handleGcUserSummary,
   gcListMailingCategoriesSchema, handleGcListMailingCategories,
   gcAddToMailingCategorySchema, handleGcAddToMailingCategory,
@@ -27,7 +28,7 @@ import {
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "getcourse-mcp", version: "0.4.0" });
+  const server = new McpServer({ name: "getcourse-mcp", version: "0.5.0" });
 
   server.tool(
     "gc_status",
@@ -144,6 +145,13 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
+    "gc_unlock_modules",
+    "Открыть застрявшему (но оплатившему) ученику модули: протолкнуть процесс выдачи доступа мимо ожидания «Ждем: завершил модуль N» (нажимает «перейти далее»). all=true — открыть весь курс сразу; по умолчанию — следующий модуль. Нужны права менеджера/супервайзера процесса. dryRun — предпросмотр.",
+    gcUnlockModulesSchema.shape,
+    async (p) => text(await handleGcUnlockModules(p)),
+  );
+
+  server.tool(
     "gc_user_summary",
     "Сводка по пользователю за один вызов: профиль + группы + заказы.",
     gcUserSummarySchema.shape,
@@ -178,7 +186,7 @@ async function main() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[getcourse-mcp] stdio server started (20 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
+  console.error("[getcourse-mcp] stdio server started (21 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
 }
 
 main().catch((e) => {

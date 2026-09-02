@@ -18,6 +18,7 @@ import {
   refundOrder,
   listMailingCategories,
   setMailingCategory,
+  unlockModules,
   type GcGroup,
 } from "./gc.js";
 
@@ -305,6 +306,27 @@ export async function handleGcRefundOrder(p: z.infer<typeof gcRefundOrderSchema>
     const r = await refundOrder(s, p.dealId, { paymentId: p.paymentId, amount: p.amount, vat: p.vat, dryRun: p.dryRun });
     const pays = r.payments?.length ? `\nПлатежи сделки:\n${r.payments.map((x) => `• ${x.paymentId} — ${x.text}`).join("\n")}` : "";
     return `${r.ok ? "OK" : "FAIL"} [${r.step}] ${r.message}${pays}`;
+  });
+}
+
+// gc_unlock_modules (write) — advance the module-delivery process past
+// «Ждем: завершил модуль N» for a stuck (but paid) student. Reproduces the manual
+// «перейти далее» click. all=true opens the whole course; default opens next module.
+export const gcUnlockModulesSchema = z.object({
+  email: z.string().describe("Email ученика."),
+  all: z
+    .boolean()
+    .optional()
+    .describe("true = прогнать «перейти далее» по всем модулям (открыть весь курс сразу); false (по умолчанию) = открыть только следующий модуль."),
+  dryRun: z.boolean().optional().describe("Показать текущее ожидание процесса и что будет сделано, без нажатия."),
+});
+export async function handleGcUnlockModules(p: z.infer<typeof gcUnlockModulesSchema>): Promise<string> {
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const r = await unlockModules(s, id, { all: p.all, dryRun: p.dryRun });
+    const steps = r.steps.length ? `\n${r.steps.join("\n")}` : "";
+    const waits = r.finalWaits.length ? `\nОжидания процесса сейчас: ${r.finalWaits.join(" | ")}` : "";
+    return `${r.ok ? "OK" : "FAIL"} ${r.message}${steps}${waits}`;
   });
 }
 
