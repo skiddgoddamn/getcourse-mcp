@@ -237,7 +237,7 @@ export const gcCreateOrderSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Сразу провести 0₽-оплату созданной сделки → доступ выдаётся немедленно. НУЖНО для комп-офферов «только купившие», где сделка «Новый» доступ НЕ даёт. " +
+      "Сразу завершить созданную 0₽-сделку (→ «Завершен») → доступ выдаётся немедленно. НУЖНО для комп-офферов «только купившие», где сделка «Новый» доступ НЕ даёт. " +
         "По умолчанию false: сделка остаётся «Новый», доступ не выдан — заверши потом gc_pay_order. ⚠️ используй complete только для 0₽/бесплатных офферов.",
     ),
   dryRun: z
@@ -270,7 +270,7 @@ export async function handleGcCreateOrder(p: z.infer<typeof gcCreateOrderSchema>
     base += `\nСоздана сделка ${fresh.dealId}${fresh.status ? ` — статус «${fresh.status}»` : ""}.`;
     if (!p.complete) return base;
     // complete=true → provести оплату созданной сделки, чтобы доступ стал живым.
-    // Для 0₽-заказа payDeal увидит, что Геткурс уже завершил сделку сам, и ничего не тронет.
+    // Если Геткурс уже завершил 0₽-сделку сам — payDeal ничего не тронет; иначе переведёт её в «Завершен».
     try {
       const pr = await payDeal(s, fresh.dealId, { dryRun: false });
       return `${base}\n${pr.ok ? "OK" : "FAIL"} ${pr.message}`;
@@ -300,8 +300,8 @@ export async function handleGcPayOrder(p: z.infer<typeof gcPayOrderSchema>): Pro
 export const gcSetOrderStatusSchema = z.object({
   dealId: z.string().describe("ID сделки (из gc_find_orders или URL /sales/control/deal/update/id/<id>)."),
   status: z
-    .enum(["new", "not_confirmed", "in_work", "cancelled", "false", "payment_waiting", "part_payed", "waiting_for_return", "pending"])
-    .describe("Новый статус сделки."),
+    .enum(["new", "payed", "not_confirmed", "in_work", "cancelled", "false", "payment_waiting", "part_payed", "waiting_for_return", "pending"])
+    .describe("Новый статус сделки. payed = «Завершен» (0₽-сделка → доступ выдан)."),
   cancelReasonId: z.string().optional().describe("ID причины отмены для status=cancelled (напр. «Дубль заказа»=54347 на li-ft.ru)."),
 });
 export async function handleGcSetOrderStatus(p: z.infer<typeof gcSetOrderStatusSchema>): Promise<string> {

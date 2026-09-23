@@ -47,7 +47,7 @@ gc_create_order  {"email":"user@x.ru","offerIds":["6510356"],"complete":true}
 #   creates the order AND completes a 0₽ payment → access is live immediately
 ```
 
-⚠️ **A priced deal left in «Новый» delivers NO access** — it must be *paid*. There is no «Оплачен» item in the status dropdown; **completion is payment-driven**. `complete:true` (or a later `gc_pay_order {"dealId":"…"}`) registers a 0₽ *received* payment → deal → «Завершён» → access granted. Use `complete` only for 0₽/comp offers.
+⚠️ **A priced deal left in «Новый» delivers NO access** — it must be *paid*. `complete:true` (or a later `gc_pay_order {"dealId":"…"}`) completes it → «Завершен» → access granted. GetCourse rejects a zero payment («Платеж не может быть нулевым»), so a 0₽ deal is completed via the status dropdown (`payed` = «Завершен»); a priced one via a *received* payment. The result is read from the deal's own «Статус:» field after a reload. Use `complete` only for 0₽/comp offers.
 
 A **0₽ order has nothing to pay**, so GetCourse flips it «Новый → Завершен» on creation by itself; `complete:true` then detects the finished deal and touches nothing. Purchase-based access does **not** appear in the user's groups — that's by design, not a bug. Verify it on `/teach/control/stat/user/id/<userId>` (Training / Lesson access), which reflects the grant immediately.
 
@@ -100,8 +100,8 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_find_offers` | Search sales offers by name → id + price + actuality. |
 | `gc_find_orders` | List a user's orders (dealId + status). |
 | `gc_create_order` | Create an order = grant access via a purchase (the only way for "buyers-only" trainings, where groups don't grant access). Reports the created deal's id and status; a priced deal in «Новый» means **no access until paid**, `complete:true` drives it to «Завершён». ⚠️ single-step: `dryRun:false` creates the order immediately. |
-| `gc_pay_order` | Complete a deal by registering a received payment (`amount` "0" by default) → deal «Завершён» → access delivered. The way to "mark paid" (no «Оплачен» in the status dropdown). ⚠️ don't use `0` on a real paid deal. `dryRun`. |
-| `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`). |
+| `gc_pay_order` | Complete a deal → «Завершен» → access delivered. `amount` "0" (default) → status `payed`; `amount` > 0 → received payment. Verified by the reloaded «Статус:». ⚠️ don't use `0` on a real paid deal. `dryRun`. |
+| `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`; `payed` = «Завершен»). OK only if the reloaded card shows the target status. |
 | `gc_refund_order` | File a money refund for an order via the GetCourse payment module (real money back to the buyer's card). Only for payments processed by the platform; VAT must mirror the original receipt. `dryRun`. |
 | `gc_unlock_modules` | Open modules for a stuck (but paid) student: advance the module-delivery process past its «завершил модуль N» wait (clicks «перейти далее»). `all:true` opens the whole course; default opens the next module. Needs manager/supervisor rights on the process. `dryRun`. |
 | `gc_user_summary` | One call: profile + groups + orders for a user. |

@@ -735,13 +735,16 @@ export interface PayDealResult {
 }
 
 /**
- * Complete a deal by registering a payment on it (deal → «Завершён»). This is what
- * actually GRANTS access for offers whose delivery is purchase-based ("только
- * купившие"): createOrder leaves the deal in «Новый» and no access is delivered
- * until a payment is RECEIVED. There is no «Оплачен» item in the status dropdown —
- * completion is payment-driven. Drives the card «Добавить платеж» form:
- * type=Счёт на оплату (invoice), amount (0 by default = comp/free), status=Получен
- * (accepted), buyer/admin notifications OFF.
+ * Complete a deal (→ «Завершен»). This is what actually GRANTS access for offers
+ * whose delivery is purchase-based ("только купившие"): createOrder leaves the deal
+ * in «Новый» and no access is delivered until the deal is completed.
+ * - amount 0 (default, comp/free): GetCourse REJECTS a zero payment («Платеж не может
+ *   быть нулевым»), and an offer without «Завершать заказ автоматически» stays «Новый»
+ *   forever — so a 0₽ deal is completed via the status dropdown (`payed` = «Завершен»).
+ * - amount > 0: the card «Добавить платеж» form — type=Счёт на оплату (invoice),
+ *   status=Получен (accepted), buyer/admin notifications OFF.
+ * Success is judged ONLY by the deal's «Статус:» field after a reload — the card also
+ * shows the user's feed of OTHER deals, full of «Завершен»/«Платеж получен».
  * ⚠️ amount defaults to "0" — do NOT call on a real paid deal you expect money for.
  */
 export async function payDeal(
@@ -771,6 +774,12 @@ export async function payDeal(
       ok: true,
       message: `Сделка ${dealId} уже завершена — платёж не требуется (0₽-заказы Геткурс завершает сам). Доступ по офферу выдан.`,
     };
+  if (Number(amount) === 0) {
+    const r = await setOrderStatus(s, dealId, "payed");
+    return r.ok
+      ? { ok: true, message: `Сделка ${dealId} завершена (0₽, статус «Завершен») — доступ по офферу выдан.` }
+      : { ok: false, message: `Сделку ${dealId} не удалось завершить: ${r.message} Текущий статус: ${r.status}.` };
+  }
   const opened = await s.page.evaluate(() => {
     const el = Array.from(document.querySelectorAll("a")).find(
       (a) => /Добавить платеж/i.test((a as HTMLElement).innerText || ""),
@@ -813,15 +822,43 @@ export async function payDeal(
     b?.click();
   });
   await s.page.waitForTimeout(3500);
-  const paid = await s.page.evaluate(() =>
-    /Получен|Завершен|Оплачен/i.test((document.body.innerText || "").replace(/\s+/g, " ")),
+  const errors = await s.page.evaluate(() =>
+    Array.from(document.querySelectorAll(".errorSummary,.alert-danger"))
+      .map((e) => ((e as HTMLElement).innerText || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join(" / "),
   );
+  await goto(s, `/sales/control/deal/update/id/${dealId}`);
+  await s.page.waitForTimeout(1000);
+  const status = await readDealStatus(s);
+  const paid = status === "Завершен";
   return {
     ok: paid,
     message: paid
-      ? `Платёж ${amount}₽ проведён — сделка ${dealId} оплачена (доступ по офферу выдан).`
-      : `Платёж отправлен, но подтверждения оплаты на сделке ${dealId} не видно — проверьте вручную.`,
+      ? `Платёж ${amount}₽ проведён — сделка ${dealId} «Завершен» (доступ по офферу выдан).`
+      : `Платёж НЕ провёлся: сделка ${dealId} в статусе «${status}»${errors ? `. Геткурс: ${errors}` : ""}.`,
   };
+}
+
+/** `Deal[change_status]` value → label shown in the card's «Статус:» field. */
+const DEAL_STATUS_LABELS: Record<string, string> = {
+  new: "Новый",
+  payed: "Завершен",
+  not_confirmed: "Не подтвержден",
+  in_work: "В работе",
+  cancelled: "Отменен",
+  false: "Ложный",
+  payment_waiting: "Ожидаем оплаты",
+  part_payed: "Частично оплачен",
+  waiting_for_return: "Ожидаем возврата",
+  pending: "Отложен",
+};
+
+/** The open deal card's own «Статус:» value (not the user's feed of other deals). */
+async function readDealStatus(s: GcSession): Promise<string> {
+  return s.page.evaluate(
+    () => ((document.body.innerText || "").match(/Статус:\s*([^\n\t]+)/) || [])[1]?.trim() || "?",
+  );
 }
 
 export interface SetOrderStatusResult {
@@ -832,10 +869,9 @@ export interface SetOrderStatusResult {
 
 /**
  * Change a deal's status (e.g. cancel a duplicate). Status values (select
- * `Deal[change_status]`): new, not_confirmed, in_work, cancelled, false,
- * payment_waiting, part_payed, waiting_for_return, pending. For `cancelled`
- * you may pass `cancelReasonId` (e.g. "Дубль заказа"=54347 on li-ft.ru).
- * NOTE: mechanism discovered from the DOM; verify end-to-end before relying on it.
+ * `Deal[change_status]`): see DEAL_STATUS_LABELS; `payed` = «Завершен» completes a
+ * 0₽ deal and delivers access. For `cancelled` you may pass `cancelReasonId`
+ * (e.g. "Дубль заказа"=54347 on li-ft.ru). ok = the reloaded card shows the target.
  */
 export async function setOrderStatus(
   s: GcSession,
@@ -863,10 +899,9 @@ export async function setOrderStatus(
   await s.page.waitForTimeout(2500);
   await goto(s, `/sales/control/deal/update/id/${dealId}`);
   await s.page.waitForTimeout(1000);
-  const cur = await s.page.evaluate(
-    () => (document.body.innerText.match(/Статус:\s*(Завершен|Отменен|Новый|В работе|Ложный|Ожидаем оплаты|Частично оплачен|Отложен|Не подтвержден)/i) || [])[1] || "?",
-  );
-  return { ok: true, message: "Смена статуса отправлена.", status: cur };
+  const cur = await readDealStatus(s);
+  const ok = cur === DEAL_STATUS_LABELS[status];
+  return { ok, message: ok ? "Статус изменён." : `Статус не сменился (ждали «${DEAL_STATUS_LABELS[status]}»).`, status: cur };
 }
 
 // ── Refunds (Геткурс payment module / gcpay) ──────────────────────────────────
