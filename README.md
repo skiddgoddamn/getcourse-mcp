@@ -104,6 +104,7 @@ Register it with your MCP client (see `.mcp.json.example`):
 | `gc_set_order_status` | Change a deal's status (e.g. cancel a duplicate: `cancelled` + `cancelReasonId`; `payed` = «Завершен»). OK only if the reloaded card shows the target status. |
 | `gc_refund_order` | File a money refund for an order via the GetCourse payment module (real money back to the buyer's card). Only for payments processed by the platform; VAT must mirror the original receipt. `dryRun`. |
 | `gc_unlock_modules` | Open modules for a stuck (but paid) student: advance the module-delivery process past its «завершил модуль N» wait (clicks «перейти далее»). `all:true` opens the whole course; default opens the next module. Needs manager/supervisor rights on the process. `dryRun`. |
+| `gc_grant_full_access` | Open ALL lessons of a training locked by stop-lessons: (optional `offerId` granted first, 0₽) → sublogin as the student → answer every open task with a stub (text, first test option, 1x1 png for required files) → accept the answers in the admin feed → repeat. Success = the admin-side student stats show no «Недоступен (стоп-урок)». Sends answers on the student's behalf — course-owner decision only; lesson/training settings untouched. `dryRun` only counts locked lessons per block. |
 | `gc_user_summary` | One call: profile + groups + orders for a user. |
 | `gc_list_mailing_categories` | List mailing categories (tag-like segmentation) — id + name. |
 | `gc_add_to_mailing_category` | Add a user to a mailing category. |

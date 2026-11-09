@@ -19,6 +19,7 @@ import {
   gcSetOrderStatusSchema, handleGcSetOrderStatus,
   gcRefundOrderSchema, handleGcRefundOrder,
   gcUnlockModulesSchema, handleGcUnlockModules,
+  gcGrantFullAccessSchema, handleGcGrantFullAccess,
   gcUserSummarySchema, handleGcUserSummary,
   gcListMailingCategoriesSchema, handleGcListMailingCategories,
   gcAddToMailingCategorySchema, handleGcAddToMailingCategory,
@@ -152,6 +153,13 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
+    "gc_grant_full_access",
+    "Открыть ученику ВСЕ уроки тренинга за стоп-уроками: (опц.) выдать оффер, затем войти под учеником, ответить на задания по цепочке, принять ответы в ленте и проверить, что «Недоступен (стоп-урок)» не осталось (проверка с админской стороны). Ответы-заглушки уходят от имени ученика — только с согласия владельца курса. Не трогает настройки уроков. dryRun — только счёт закрытых уроков по блокам.",
+    gcGrantFullAccessSchema.shape,
+    async (p) => text(await handleGcGrantFullAccess(p)),
+  );
+
+  server.tool(
     "gc_user_summary",
     "Сводка по пользователю за один вызов: профиль + группы + заказы.",
     gcUserSummarySchema.shape,
@@ -186,7 +194,7 @@ async function main() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[getcourse-mcp] stdio server started (21 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
+  console.error("[getcourse-mcp] stdio server started (22 tools). Requires GETCOURSE_CDP_URL + logged-in browser.");
 }
 
 main().catch((e) => {

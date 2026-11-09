@@ -21,6 +21,7 @@ import {
   unlockModules,
   type GcGroup,
 } from "./gc.js";
+import { grantFullAccess } from "./grant.js";
 
 /**
  * Tool layer: zod schemas + handlers returning human-readable text.
@@ -407,5 +408,36 @@ export async function handleGcRemoveFromMailingCategory(p: z.infer<typeof gcRemo
     const r = await setMailingCategory(s, id, p.categoryId, false);
     const rows = r.rows?.length ? `\n${r.rows.join("\n")}` : "";
     return `${r.ok ? "OK" : "FAIL"} ${r.message}${rows}`;
+  });
+}
+
+// gc_grant_full_access (write) — open ALL lessons behind stop-lessons for a user
+export const gcGrantFullAccessSchema = z.object({
+  email: z.string().describe("Email ученика (существующий)."),
+  trainingId: z.string().describe("ID тренинга (корень с блоками; из URL /teach/control/stream/view/id/<id>)."),
+  offerId: z
+    .string()
+    .optional()
+    .describe("Оффер, который сначала выдать (как gc_create_order complete=true, только 0₽). Не нужен, если доступ к тренингу уже есть."),
+  answerText: z.string().optional().describe('Текст ответа на задания (по умолчанию «Изучил, готово»).'),
+  maxRounds: z.number().int().min(1).max(40).optional().describe("Предел кругов «ответ -> приём» (по умолчанию 15)."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Только показать, сколько уроков закрыто стоп-уроками (по блокам). Ничего не отправляет и не создаёт."),
+});
+export async function handleGcGrantFullAccess(p: z.infer<typeof gcGrantFullAccessSchema>): Promise<string> {
+  let head = "";
+  if (p.offerId && !p.dryRun) {
+    head = (await handleGcCreateOrder({ email: p.email, offerIds: [p.offerId], complete: true })) + "\n";
+  } else if (p.offerId && p.dryRun) {
+    head = `dryRun: выдал бы оффер ${p.offerId} (create_order + complete).\n`;
+  }
+  return withSession(async (s) => {
+    const id = await resolveUserId(s, p.email);
+    const r = await grantFullAccess(s, id, { trainingId: p.trainingId, answerText: p.answerText, maxRounds: p.maxRounds, dryRun: p.dryRun });
+    const blocks = r.blocks.map((b) => `• ${b.title} [${b.id}] — стоп-закрыто: ${b.stopLocked}`).join("\n");
+    const log = r.log.length ? `\nЛог:\n${r.log.join("\n")}` : "";
+    return `${head}${r.ok ? "OK" : "FAIL"} ${r.message}\nБлоки:\n${blocks}${log}`;
   });
 }
